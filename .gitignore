@@ -1,0 +1,9 @@
+.env
+.runtime/
+*.mp4
+*.pdf
+__pycache__/
+.venv/
+*.pyc
+dist/
+.pytest_cache/

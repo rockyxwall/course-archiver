@@ -1,0 +1,28 @@
+{
+  "_comment": "Fill this file after running: uv run python main.py --train",
+  "_instructions": [
+    "1. Run --train mode and navigate the site",
+    "2. Open training_report.json to see captured URLs and links",
+    "3. Fill in the selectors below based on what you observe",
+    "4. CSS selectors: use DevTools (F12) to verify them"
+  ],
+  "login": {
+    "url": "https://www.redwansmethod.com/profile",
+    "email_input": "input[type='email']",
+    "password_input": "input[type='password']",
+    "submit_button": "button[type='submit']"
+  },
+  "courses_list": {
+    "url": "https://redwansmethod.com/courses",
+    "course_link": "a[href*='/course/']"
+  },
+  "course_page": {
+    "module_container": ".module",
+    "module_title": ".module-title",
+    "lesson_link": "a[href*='/lesson/']"
+  },
+  "lesson_page": {
+    "pdf_link": "a[href$='.pdf']",
+    "title": "h1"
+  }
+}
