@@ -102,73 +102,74 @@ def run_auto(cfg) -> None:
         "[bold green]Total Progress",
         total=total_count,
         name="Overall",
-        info=f"0/{total_count} videos",
+        info=f"0/{total_count} completed",
     )
 
     def _worker(idx, title, kind, v_url, referer, v_out, pdfs, ck, frags, qual):
         errs = []
-        task_id = None
-        if v_url and v_out and not v_out.exists():
-            display_title = title if len(title) <= 22 else f"{title[:19]}..."
-            task_id = progress.add_task(
-                f"[cyan]{display_title}",
-                total=None,
-                name=f"[{idx}/{total_count}] {display_title}",
-                info="Starting...",
-            )
+        display_title = title if len(title) <= 22 else f"{title[:19]}..."
+        task_id = progress.add_task(
+            f"[cyan]{display_title}",
+            total=None,
+            name=f"[{idx}/{total_count}] {display_title}",
+            info="Starting...",
+        )
 
-            def ydl_hook(d):
-                if d["status"] == "downloading":
-                    downloaded = d.get("downloaded_bytes", 0)
-                    frag_idx = d.get("fragment_index")
-                    frag_count = d.get("fragment_count")
-                    speed_str = ui.fmt_speed(d.get("speed"))
-                    eta_str = ui.fmt_eta(d.get("eta"))
-                    bytes_str = ui.fmt_bytes(downloaded)
+        try:
+            # 1. Video Download
+            if v_url and v_out and not v_out.exists():
+                def ydl_hook(d):
+                    if d["status"] == "downloading":
+                        downloaded = d.get("downloaded_bytes", 0)
+                        frag_idx = d.get("fragment_index")
+                        frag_count = d.get("fragment_count")
+                        speed_str = ui.fmt_speed(d.get("speed"))
+                        eta_str = ui.fmt_eta(d.get("eta"))
+                        bytes_str = ui.fmt_bytes(downloaded)
 
-                    if frag_count and frag_count > 0:
-                        curr_frag = frag_idx or 0
-                        info = f"{curr_frag}/{frag_count} frags ({bytes_str}) {speed_str} {eta_str}"
-                        progress.update(task_id, completed=curr_frag, total=frag_count, info=info)
-                    else:
-                        total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
-                        if total_bytes > 0:
-                            total_str = ui.fmt_bytes(total_bytes)
-                            info = f"{bytes_str}/{total_str} {speed_str} {eta_str}"
-                            progress.update(task_id, completed=downloaded, total=total_bytes, info=info)
+                        if frag_count and frag_count > 0:
+                            curr_frag = frag_idx or 0
+                            info = f"{curr_frag}/{frag_count} frags ({bytes_str}) {speed_str} {eta_str}"
+                            progress.update(task_id, completed=curr_frag, total=frag_count, info=info)
                         else:
-                            info = f"{bytes_str} {speed_str} {eta_str}"
-                            progress.update(task_id, completed=downloaded, info=info)
-                elif d["status"] == "finished":
-                    progress.update(task_id, completed=100, total=100, info="Processing...")
+                            total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+                            if total_bytes > 0:
+                                total_str = ui.fmt_bytes(total_bytes)
+                                info = f"{bytes_str}/{total_str} {speed_str} {eta_str}"
+                                progress.update(task_id, completed=downloaded, total=total_bytes, info=info)
+                            else:
+                                info = f"{bytes_str} {speed_str} {eta_str}"
+                                progress.update(task_id, completed=downloaded, info=info)
+                    elif d["status"] == "finished":
+                        progress.update(task_id, completed=100, total=100, info="Processing video...")
 
-            try:
-                downloader.download_video(v_url, v_out, referer, frags, qual, progress_hook=ydl_hook)
-            except Exception as e:
-                errs.append(f"Video '{title}' failed: {e}")
-            finally:
-                if task_id is not None:
-                    progress.remove_task(task_id)
+                try:
+                    downloader.download_video(v_url, v_out, referer, frags, qual, progress_hook=ydl_hook)
+                except Exception as e:
+                    errs.append(f"Video '{title}' failed: {e}")
 
-        for label, url, p_out in pdfs:
-            if not p_out.exists() and not p_out.with_suffix(".url").exists():
-                display_title = title if len(title) <= 22 else f"{title[:19]}..."
-                pdf_task = progress.add_task(
-                    f"[magenta]{display_title}",
-                    total=None,
-                    name=f"[{idx}/{total_count}] {display_title}",
-                    info=f"Downloading {label}.pdf...",
+            # 2. PDF Attachments (in the same progress bar)
+            needed_pdfs = [(lbl, u, p) for lbl, u, p in pdfs if not p.exists() and not p.with_suffix(".url").exists()]
+            total_needed = len(needed_pdfs)
+            for p_idx, (label, url, p_out) in enumerate(needed_pdfs, 1):
+                progress.update(
+                    task_id,
+                    completed=100,
+                    total=100,
+                    info=f"PDF ({p_idx}/{total_needed} {label}.pdf)",
                 )
                 try:
                     downloader.download_pdf(url, p_out, ck)
                 except Exception as e:
                     errs.append(f"PDF '{title}' ({label}) failed: {e}")
-                finally:
-                    progress.remove_task(pdf_task)
+
+        finally:
+            if task_id is not None:
+                progress.remove_task(task_id)
 
         progress.advance(overall_task)
         curr_overall = progress.tasks[overall_task].completed
-        progress.update(overall_task, info=f"{int(curr_overall)}/{total_count} videos")
+        progress.update(overall_task, info=f"{int(curr_overall)}/{total_count} completed")
         return title, kind, errs
 
     futures = set()
@@ -211,7 +212,7 @@ def run_auto(cfg) -> None:
                                 skipped += 1
                                 progress.advance(overall_task)
                                 curr_overall = progress.tasks[overall_task].completed
-                                progress.update(overall_task, info=f"{int(curr_overall)}/{total_count} videos")
+                                progress.update(overall_task, info=f"{int(curr_overall)}/{total_count} completed")
                                 progress.console.print(f"[dim][{idx}/{total_count}] Skipped (already exists): {video.title}[/dim]")
                                 continue
 
