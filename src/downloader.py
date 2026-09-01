@@ -4,6 +4,7 @@ from pathlib import Path
 
 import time
 
+import imageio_ffmpeg
 import requests
 import yt_dlp
 
@@ -20,6 +21,7 @@ def download_video(
     concurrent: int,
     quality: int,
     progress_hook=None,
+    postprocessor_hook=None,
     max_retries: int = 3,
 ) -> None:
     if out_path.exists():
@@ -53,20 +55,22 @@ def download_video(
             "home": str(out_path.parent),
             "temp": str(temp_dir),
         },
-        "outtmpl": {"default": out_path.stem},  # yt-dlp appends .mp4
+        "outtmpl": {"default": f"{out_path.stem}.%(ext)s"},
         "format": fmt,
+        "ffmpeg_location": imageio_ffmpeg.get_ffmpeg_exe(),
         "concurrent_fragment_downloads": concurrent,
         "merge_output_format": "mp4",
         "http_headers": headers,
         "progress_hooks": [progress_hook] if progress_hook else [],
+        "postprocessor_hooks": [postprocessor_hook] if postprocessor_hook else [],
         "quiet": True,
         "no_warnings": True,
         "continuedl": True,
-        "socket_timeout": 60,
+        "socket_timeout": 15,
         "retries": 20,
-        "fragment_retries": 20,
+        "fragment_retries": 50,
         "extractor_retries": 10,
-        "file_access_retries": 5,
+        "file_access_retries": 10,
         "noprogress": True,
     }
 

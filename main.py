@@ -7,6 +7,7 @@ Usage:
 """
 import argparse
 import os
+import re
 import sys
 
 # Force output streams to UTF-8 to handle Bengali/Unicode characters
@@ -118,6 +119,18 @@ def run_auto(cfg) -> None:
         try:
             # 1. Video Download
             if v_url and v_out and not v_out.exists():
+                temp_dir = v_out.parent / ".temp"
+                downloaded_frags = set()
+                if temp_dir.exists():
+                    try:
+                        for f in temp_dir.iterdir():
+                            if ".part-Frag" in f.name and not f.name.endswith(".part"):
+                                m = re.search(r"-Frag(\d+)", f.name)
+                                if m:
+                                    downloaded_frags.add(int(m.group(1)))
+                    except Exception:
+                        pass
+
                 def ydl_hook(d):
                     if d["status"] == "downloading":
                         downloaded = d.get("downloaded_bytes", 0)
@@ -128,9 +141,11 @@ def run_auto(cfg) -> None:
                         bytes_str = ui.fmt_bytes(downloaded)
 
                         if frag_count and frag_count > 0:
-                            curr_frag = frag_idx or 0
-                            info = f"{curr_frag}/{frag_count} frags ({bytes_str}) {speed_str} {eta_str}"
-                            progress.update(task_id, completed=curr_frag, total=frag_count, info=info)
+                            if frag_idx is not None:
+                                downloaded_frags.add(frag_idx)
+                            completed_count = len(downloaded_frags)
+                            info = f"{completed_count}/{frag_count} frags ({bytes_str}) {speed_str} {eta_str}"
+                            progress.update(task_id, completed=completed_count, total=frag_count, info=info)
                         else:
                             total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
                             if total_bytes > 0:
@@ -141,10 +156,21 @@ def run_auto(cfg) -> None:
                                 info = f"{bytes_str} {speed_str} {eta_str}"
                                 progress.update(task_id, completed=downloaded, info=info)
                     elif d["status"] == "finished":
-                        progress.update(task_id, completed=100, total=100, info="Processing video...")
+                        progress.update(task_id, completed=100, total=100, info="Merging video (ffmpeg)...")
+
+                def post_hook(d):
+                    status = d.get("status")
+                    if status == "started":
+                        progress.update(task_id, completed=100, total=100, info="Merging video (ffmpeg)...")
+                    elif status == "finished":
+                        progress.update(task_id, completed=100, total=100, info="Merge complete.")
 
                 try:
-                    downloader.download_video(v_url, v_out, referer, frags, qual, progress_hook=ydl_hook)
+                    downloader.download_video(
+                        v_url, v_out, referer, frags, qual,
+                        progress_hook=ydl_hook,
+                        postprocessor_hook=post_hook,
+                    )
                 except Exception as e:
                     errs.append(f"Video '{title}' failed: {e}")
 
