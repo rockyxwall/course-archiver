@@ -77,12 +77,15 @@ config/
 ```
 OUTPUT_DIR/
   {Course}/
-    {Subject}/
-      {Chapter}/
-        01_Lecture 1/
-          01_Lecture 1.mp4
-          Lecture.pdf
-          Note.pdf
+    {Chapter_LIVE}/
+      01_Lecture 1/
+        01_Lecture 1.mp4
+        Lecture.pdf
+        Note.pdf
+    {Chapter_ARCHIVE}/
+      01_Lecture 1/
+        01_Lecture 1.mp4
+        Lecture.pdf
 ```
 
 ## Re-login / Session Expired

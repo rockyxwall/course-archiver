@@ -133,6 +133,21 @@ def download_pdf(pdf_url: str, out_path: Path, cookies: dict[str, str]) -> None:
     temp_path.replace(out_path)
 
 
+def _format_chapter_dir(chapter_name: str, subject_name: str) -> str:
+    sub_upper = subject_name.upper()
+    tag = ""
+    if "LIVE" in sub_upper:
+        tag = "LIVE"
+    elif "ARCHIVE" in sub_upper:
+        tag = "ARCHIVE"
+    elif ":" in subject_name:
+        tag = subject_name.split(":")[-1].strip()
+
+    if tag and not chapter_name.upper().endswith(tag):
+        return f"{chapter_name}_{tag}"
+    return chapter_name
+
+
 def build_lecture_dir(
     output_dir: Path,
     course_name: str,
@@ -141,12 +156,12 @@ def build_lecture_dir(
     video_number: int,
     title: str,
 ) -> Path:
-    """Creates a unified folder for a lecture holding both its video and PDFs."""
+    """Creates a unified folder for a lecture: {Course}/{Chapter_TAG}/{01_Title}/"""
+    ch_dir = _format_chapter_dir(chapter_name, subject_name)
     return (
         output_dir
         / _safe_name(course_name)
-        / _safe_name(subject_name)
-        / _safe_name(chapter_name)
+        / _safe_name(ch_dir)
         / f"{video_number:02d}_{_safe_name(title)}"
     )
 

@@ -77,30 +77,10 @@ def run_auto(cfg) -> None:
         ui.console.print("[red]No courses found.[/red]")
         sys.exit(1)
 
-    selected = ui.select_courses(courses)
+    selected = ui.select_workflow(courses, cookies, scraper, cfg.output_dir)
     if not selected:
         ui.console.print("Nothing selected. Exiting.")
         sys.exit(0)
-
-    ui.console.print("Fetching course contents via API...")
-    for course in selected:
-        ui.console.print(f"  [cyan]{course.name}[/cyan]")
-        scraper.get_course_tree(course, cookies)
-
-    # Chapter selection (all pre-selected, user can deselect)
-    selected = ui.select_chapters(selected)
-    if not selected:
-        ui.console.print("No chapters selected. Exiting.")
-        sys.exit(0)
-
-    ui.print_course_tree(selected)
-
-    total_videos = sum(
-        len(ch.videos)
-        for c in selected
-        for s in c.subjects
-        for ch in s.chapters
-    )
 
     # ── Phase 3 & 4: Just-In-Time Intercept & Concurrent Download ───────────
     from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -115,7 +95,7 @@ def run_auto(cfg) -> None:
     ]
 
     total_count = len(all_items)
-    ui.console.print(f"\nProcessing [bold]{total_count}[/bold] videos with [cyan]{cfg.concurrent_downloads}[/cyan] parallel downloads...\n")
+    ui.console.print(f"\nProcessing [bold]{total_count}[/bold] videos with [cyan]{cfg.concurrent_downloads}[/cyan] parallel downloads (Target: [bold green]{cfg.video_quality}p[/bold green])...\n")
 
     progress = ui.make_progress()
     overall_task = progress.add_task("[bold green]Total Progress", total=total_count, name="Overall")
@@ -217,14 +197,14 @@ def run_auto(cfg) -> None:
                                             progress.console.print(f"[red]  {err}[/red]")
                                     else:
                                         completed += 1
-                                        progress.console.print(f"[green]✓ Completed {k}: {t}[/green]")
+                                        progress.console.print(f"[green]✓ Completed {k} [{cfg.video_quality}p]: {t}[/green]")
 
                             # JIT URL interception if video download needed
                             video_url = None
                             referer = ""
                             kind = "YT" if video.video_type == "youtube" else "Bunny"
                             if video_needed:
-                                progress.console.print(f"[{idx}/{total_count}] [cyan]Intercepting & queuing {kind}:[/cyan] {video.title}")
+                                progress.console.print(f"[{idx}/{total_count}] [cyan]Intercepting & queuing {kind} [{cfg.video_quality}p]:[/cyan] {video.title}")
                                 stream_info = scraper.intercept_video_url(page, video)
                                 if stream_info:
                                     video_url = stream_info.get("url")
@@ -260,7 +240,7 @@ def run_auto(cfg) -> None:
                             progress.console.print(f"[red]  {err}[/red]")
                     else:
                         completed += 1
-                        progress.console.print(f"[green]✓ Completed {k}: {t}[/green]")
+                        progress.console.print(f"[green]✓ Completed {k} [{cfg.video_quality}p]: {t}[/green]")
     except KeyboardInterrupt:
         ui.console.print("\n[yellow]Operation cancelled by user. Exiting...[/yellow]")
         os._exit(0)

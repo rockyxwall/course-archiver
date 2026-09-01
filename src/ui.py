@@ -54,6 +54,8 @@ def _save_state(state: dict) -> None:
         pass
 
 
+from rich.panel import Panel
+
 def print_course_tree(courses: list[Course]) -> None:
     tree = Tree("[bold cyan]Selected Courses[/bold cyan]")
     for course in courses:
@@ -67,78 +69,124 @@ def print_course_tree(courses: list[Course]) -> None:
     console.print(tree)
 
 
-def select_courses(courses: list[Course]) -> list[Course]:
+def print_session_status(courses: list[Course], output_dir: Path) -> tuple[int, int]:
+    """Prints a detailed downloader-grade status view of previous selection."""
+    from src import downloader
+
+    tree = Tree("[bold cyan]Previous Session & Download Status[/bold cyan]")
+    total_videos = 0
+    done_videos = 0
+
+    for course in courses:
+        c_branch = tree.add(f"[bold green]{course.name}[/bold green]")
+        for subject in course.subjects:
+            for chapter in subject.chapters:
+                ch_tag = "LIVE" if "LIVE" in subject.name.upper() else ("ARCHIVE" if "ARCHIVE" in subject.name.upper() else subject.name)
+                ch_branch = c_branch.add(f"[bold yellow]{chapter.name}[/bold yellow] [dim]({ch_tag})[/dim]")
+                for video in chapter.videos:
+                    total_videos += 1
+                    video_out = downloader.build_out_path(
+                        output_dir, course.name, subject.name,
+                        chapter.name, video.number, video.title,
+                        f"{video.number:02d}_{video.title}.mp4"
+                    )
+                    if video_out.exists():
+                        done_videos += 1
+                        ch_branch.add(f"[green]✓ {video.number:02d}. {video.title}[/green] [dim](Downloaded)[/dim]")
+                    else:
+                        temp_dir = video_out.parent / ".temp"
+                        if temp_dir.exists():
+                            ch_branch.add(f"[yellow]⏳ {video.number:02d}. {video.title}[/yellow] [italic yellow](Partially downloaded)[/italic yellow]")
+                        else:
+                            ch_branch.add(f"[dim]⏳ {video.number:02d}. {video.title} (Pending)[/dim]")
+
+    console.print()
+    console.print(tree)
+    rem = total_videos - done_videos
+    console.print(f"\n[bold]Status:[/bold] [green]{done_videos}[/green] completed, [yellow]{rem}[/yellow] remaining of [cyan]{total_videos}[/cyan] total videos.\n")
+    return total_videos, done_videos
+
+
+def select_workflow(all_courses: list[Course], cookies: dict, scraper, output_dir: Path) -> list[Course]:
+    """Handles resume check with full status view or fresh course + chapter selection."""
     state = _load_state()
-    last_ids = set(state.get("courses", []))
+    saved_course_ids = state.get("courses", [])
+    saved_ch_map = state.get("chapters", {})
 
-    choices = [
-        {
-            "name": c.name,
-            "value": c,
-            "enabled": (c.id in last_ids) if last_ids else True,
-        }
-        for c in courses
-    ]
+    if saved_course_ids:
+        matched_courses = [c for c in all_courses if c.id in saved_course_ids]
+        if matched_courses:
+            # Populate course tree to inspect real on-disk status
+            console.print("\n[dim]Checking previous session status...[/dim]")
+            for course in matched_courses:
+                scraper.get_course_tree(course, cookies)
+                for subject in course.subjects:
+                    if subject.id in saved_ch_map:
+                        saved_ids = saved_ch_map[subject.id]
+                        id_to_ch = {ch.id: ch for ch in subject.chapters}
+                        ordered = [id_to_ch[cid] for cid in saved_ids if cid in id_to_ch]
+                        subject.chapters = ordered
+                    else:
+                        subject.chapters = []
+                course.subjects = [s for s in course.subjects if s.chapters]
+            matched_courses = [c for c in matched_courses if c.subjects]
 
-    selected = inquirer.checkbox(
+            if matched_courses:
+                total, done = print_session_status(matched_courses, output_dir)
+                rem = total - done
+
+                choice = inquirer.select(
+                    message="Resume previous selection?",
+                    choices=[
+                        {
+                            "name": f"▶ Yes — Resume & download remaining ({rem} videos)",
+                            "value": "resume",
+                        },
+                        {
+                            "name": "✎ No  — Select fresh courses/chapters",
+                            "value": "fresh",
+                        },
+                    ],
+                ).execute()
+
+                if choice == "resume":
+                    return matched_courses
+
+    # Fresh selection flow
+    choices = [{"name": c.name, "value": c} for c in all_courses]
+    selected_courses = inquirer.checkbox(
         message="Select courses to download (Space to toggle, Enter to confirm):",
         choices=choices,
     ).execute()
 
-    if selected is not None:
-        state["courses"] = [c.id for c in selected]
-        _save_state(state)
+    if not selected_courses:
+        return []
 
-    return selected or []
+    console.print("\nFetching course contents via API...")
+    for course in selected_courses:
+        console.print(f"  [cyan]{course.name}[/cyan]")
+        scraper.get_course_tree(course, cookies)
 
-
-def select_chapters(courses: list[Course]) -> list[Course]:
-    """Pick chapters per subject, with last selection and order remembered."""
-    state = _load_state()
-    saved_ch_map = state.get("chapters", {})
-
-    for course in courses:
+    new_saved_ch_map = {}
+    for course in selected_courses:
         for subject in course.subjects:
-            saved_ids = saved_ch_map.get(subject.id, None)
-
-            if saved_ids is not None:
-                # Prioritize previous order, then append any new chapters
-                id_to_ch = {ch.id: ch for ch in subject.chapters}
-                ordered_chapters = [id_to_ch[cid] for cid in saved_ids if cid in id_to_ch]
-                ordered_chapters += [ch for ch in subject.chapters if ch.id not in saved_ids]
-
-                saved_set = set(saved_ids)
-                choices = [
-                    {
-                        "name": f"{ch.name} ({len(ch.videos)} videos)",
-                        "value": ch,
-                        "enabled": (ch.id in saved_set),
-                    }
-                    for ch in ordered_chapters
-                ]
-            else:
-                choices = [
-                    {
-                        "name": f"{ch.name} ({len(ch.videos)} videos)",
-                        "value": ch,
-                        "enabled": True,
-                    }
-                    for ch in subject.chapters
-                ]
-
-            selected = inquirer.checkbox(
+            choices = [
+                {"name": f"{ch.name} ({len(ch.videos)} videos)", "value": ch, "enabled": True}
+                for ch in subject.chapters
+            ]
+            selected_chs = inquirer.checkbox(
                 message=f"[{subject.name}] — pick chapters:",
                 choices=choices,
             ).execute()
 
-            if not selected:
+            if not selected_chs:
                 subject.chapters = []
-                saved_ch_map[subject.id] = []
+                new_saved_ch_map[subject.id] = []
                 continue
 
             # Show numbered list for reordering
             console.print(f"\n[bold]Download order for [{subject.name}]:[/bold]")
-            for i, ch in enumerate(selected, 1):
+            for i, ch in enumerate(selected_chs, 1):
                 console.print(f"  [dim]{i}.[/dim] {ch.name}")
 
             raw = inquirer.text(
@@ -148,19 +196,21 @@ def select_chapters(courses: list[Course]) -> list[Course]:
             if raw:
                 try:
                     indices = [int(x.strip()) - 1 for x in raw.split(",")]
-                    selected = [selected[i] for i in indices if 0 <= i < len(selected)]
+                    selected_chs = [selected_chs[i] for i in indices if 0 <= i < len(selected_chs)]
                 except (ValueError, IndexError):
                     console.print("[yellow]Invalid order input — keeping original.[/yellow]")
 
-            subject.chapters = selected
-            saved_ch_map[subject.id] = [ch.id for ch in selected]
+            subject.chapters = selected_chs
+            new_saved_ch_map[subject.id] = [ch.id for ch in selected_chs]
 
-    state["chapters"] = saved_ch_map
+        course.subjects = [s for s in course.subjects if s.chapters]
+
+    # Save fresh state
+    state["courses"] = [c.id for c in selected_courses]
+    state["chapters"] = new_saved_ch_map
     _save_state(state)
 
-    for course in courses:
-        course.subjects = [s for s in course.subjects if s.chapters]
-    return courses
+    return [c for c in selected_courses if c.subjects]
 
 
 def print_summary(total: int, completed: int, skipped: int, failed: int, output_dir) -> None:
