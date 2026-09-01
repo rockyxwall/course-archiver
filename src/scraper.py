@@ -71,6 +71,7 @@ def get_all_courses(cookies: dict) -> list[Course]:
 
 def get_course_tree(course: Course, cookies: dict) -> None:
     """Populate course.subjects → chapters → videos in-place."""
+    course.subjects = []
     _, token = get_session_info(cookies)
     sdata = _api(f"/subjects/fetchAllSubjects/{course.id}", cookies, token)
     subjects_raw = sdata.get("subjects", sdata) if isinstance(sdata, dict) else sdata

@@ -251,11 +251,11 @@ def select_workflow(all_courses: list[Course], cookies: dict, scraper, output_di
         # Prompt for subject/section if course has multiple subjects (e.g. Live vs Archive)
         if len(course.subjects) > 1:
             subj_choices = [
-                {"name": s.name, "value": s, "enabled": True}
+                {"name": s.name, "value": s, "enabled": False}
                 for s in course.subjects
             ]
             selected_subjects = inquirer.checkbox(
-                message=f"[{course.name}] Select sections (Live / Archive):",
+                message=f"[{course.name}] Select sections (Space to select, Enter to confirm):",
                 choices=subj_choices,
             ).execute()
         else:
