@@ -98,7 +98,12 @@ def run_auto(cfg) -> None:
     ui.console.print(f"\nProcessing [bold]{total_count}[/bold] videos with [cyan]{cfg.concurrent_downloads}[/cyan] parallel downloads (Target: [bold green]{cfg.video_quality}p[/bold green])...\n")
 
     progress = ui.make_progress()
-    overall_task = progress.add_task("[bold green]Total Progress", total=total_count, name="Overall")
+    overall_task = progress.add_task(
+        "[bold green]Total Progress",
+        total=total_count,
+        name="Overall",
+        info=f"0/{total_count} videos",
+    )
 
     def _worker(idx, title, kind, v_url, referer, v_out, pdfs, ck, frags, qual):
         errs = []
@@ -109,22 +114,33 @@ def run_auto(cfg) -> None:
                 f"[cyan]{display_title}",
                 total=None,
                 name=f"[{idx}/{total_count}] {display_title}",
+                info="Starting...",
             )
 
             def ydl_hook(d):
                 if d["status"] == "downloading":
-                    total = d.get("total_bytes") or d.get("total_bytes_estimate")
                     downloaded = d.get("downloaded_bytes", 0)
                     frag_idx = d.get("fragment_index")
                     frag_count = d.get("fragment_count")
-                    if total and total > 0:
-                        progress.update(task_id, completed=downloaded, total=total)
-                    elif frag_count and frag_count > 0:
-                        progress.update(task_id, completed=frag_idx or 0, total=frag_count)
+                    speed_str = ui.fmt_speed(d.get("speed"))
+                    eta_str = ui.fmt_eta(d.get("eta"))
+                    bytes_str = ui.fmt_bytes(downloaded)
+
+                    if frag_count and frag_count > 0:
+                        curr_frag = frag_idx or 0
+                        info = f"{curr_frag}/{frag_count} frags ({bytes_str}) {speed_str} {eta_str}"
+                        progress.update(task_id, completed=curr_frag, total=frag_count, info=info)
                     else:
-                        progress.update(task_id, completed=downloaded)
+                        total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+                        if total_bytes > 0:
+                            total_str = ui.fmt_bytes(total_bytes)
+                            info = f"{bytes_str}/{total_str} {speed_str} {eta_str}"
+                            progress.update(task_id, completed=downloaded, total=total_bytes, info=info)
+                        else:
+                            info = f"{bytes_str} {speed_str} {eta_str}"
+                            progress.update(task_id, completed=downloaded, info=info)
                 elif d["status"] == "finished":
-                    progress.update(task_id, completed=100, total=100)
+                    progress.update(task_id, completed=100, total=100, info="Processing...")
 
             try:
                 downloader.download_video(v_url, v_out, referer, frags, qual, progress_hook=ydl_hook)
@@ -142,6 +158,8 @@ def run_auto(cfg) -> None:
                     errs.append(f"PDF '{title}' ({label}) failed: {e}")
 
         progress.advance(overall_task)
+        curr_overall = progress.tasks[overall_task].completed
+        progress.update(overall_task, info=f"{int(curr_overall)}/{total_count} videos")
         return title, kind, errs
 
     futures = set()
@@ -183,6 +201,8 @@ def run_auto(cfg) -> None:
                             if not video_needed and not pdfs_needed:
                                 skipped += 1
                                 progress.advance(overall_task)
+                                curr_overall = progress.tasks[overall_task].completed
+                                progress.update(overall_task, info=f"{int(curr_overall)}/{total_count} videos")
                                 progress.console.print(f"[dim][{idx}/{total_count}] Skipped (already exists): {video.title}[/dim]")
                                 continue
 

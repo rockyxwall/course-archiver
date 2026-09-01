@@ -22,15 +22,40 @@ console = Console()
 STATE_PATH = Path(__file__).parent.parent / ".runtime" / "last_selection.json"
 
 
+def fmt_bytes(n: int | float | None) -> str:
+    if not n or n <= 0:
+        return "0.0 MB"
+    if n >= 1024 * 1024:
+        return f"{n / (1024**2):.1f} MB"
+    if n >= 1024:
+        return f"{n / 1024:.0f} KB"
+    return f"{int(n)} B"
+
+
+def fmt_speed(s: float | None) -> str:
+    if not s or s <= 0:
+        return "-- MB/s"
+    if s >= 1024**2:
+        return f"{s / (1024**2):.1f} MB/s"
+    return f"{s / 1024:.0f} KB/s"
+
+
+def fmt_eta(sec: int | float | None) -> str:
+    if not sec or sec <= 0:
+        return "--:--"
+    sec_int = int(sec)
+    m, s = divmod(sec_int, 60)
+    h, m = divmod(m, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
+
+
 def make_progress() -> Progress:
     return Progress(
         SpinnerColumn(),
         TextColumn("[bold cyan]{task.fields[name]}", justify="left"),
-        BarColumn(bar_width=24),
+        BarColumn(bar_width=20),
         TaskProgressColumn(),
-        DownloadColumn(),
-        TransferSpeedColumn(),
-        TimeRemainingColumn(),
+        TextColumn("[dim]{task.fields[info]}[/dim]"),
         console=console,
     )
 
@@ -96,7 +121,30 @@ def print_session_status(courses: list[Course], output_dir: Path) -> tuple[int, 
                     else:
                         temp_dir = video_out.parent / ".temp"
                         if temp_dir.exists():
-                            ch_branch.add(f"[yellow]⏳ {video.number:02d}. {video.title}[/yellow] [italic yellow](Partially downloaded)[/italic yellow]")
+                            total_size = 0
+                            frag_count = 0
+                            for f in temp_dir.iterdir():
+                                if f.is_file():
+                                    total_size += f.stat().st_size
+                                    if ".part-Frag" in f.name:
+                                        frag_count += 1
+                                    elif f.suffix == ".ytdl":
+                                        try:
+                                            with open(f, "r", encoding="utf-8") as yf:
+                                                ydata = json.load(yf)
+                                                frag_count = max(
+                                                    frag_count,
+                                                    ydata.get("fragment_index", 0),
+                                                    len(ydata.get("fragments", []))
+                                                )
+                                        except Exception:
+                                            pass
+                            if total_size > 0:
+                                size_str = fmt_bytes(total_size)
+                                frag_str = f" · {frag_count} frags" if frag_count > 0 else ""
+                                ch_branch.add(f"[yellow]⏳ {video.number:02d}. {video.title}[/yellow] [italic yellow](Partially downloaded: {size_str}{frag_str})[/italic yellow]")
+                            else:
+                                ch_branch.add(f"[dim]⏳ {video.number:02d}. {video.title} (Pending)[/dim]")
                         else:
                             ch_branch.add(f"[dim]⏳ {video.number:02d}. {video.title} (Pending)[/dim]")
 
