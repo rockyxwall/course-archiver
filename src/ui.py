@@ -248,7 +248,26 @@ def select_workflow(all_courses: list[Course], cookies: dict, scraper, output_di
 
     new_saved_ch_map = {}
     for course in selected_courses:
-        for subject in course.subjects:
+        # Prompt for subject/section if course has multiple subjects (e.g. Live vs Archive)
+        if len(course.subjects) > 1:
+            subj_choices = [
+                {"name": s.name, "value": s, "enabled": True}
+                for s in course.subjects
+            ]
+            selected_subjects = inquirer.checkbox(
+                message=f"[{course.name}] Select sections (Live / Archive):",
+                choices=subj_choices,
+            ).execute()
+        else:
+            selected_subjects = course.subjects
+
+        if not selected_subjects:
+            course.subjects = []
+            continue
+
+        for subject in selected_subjects:
+            if not subject.chapters:
+                continue
             choices = [
                 {"name": f"{ch.name} ({len(ch.videos)} videos)", "value": ch, "enabled": True}
                 for ch in subject.chapters
@@ -282,7 +301,7 @@ def select_workflow(all_courses: list[Course], cookies: dict, scraper, output_di
             subject.chapters = selected_chs
             new_saved_ch_map[subject.id] = [ch.id for ch in selected_chs]
 
-        course.subjects = [s for s in course.subjects if s.chapters]
+        course.subjects = [s for s in selected_subjects if s.chapters]
 
     # Save fresh state
     state["courses"] = [c.id for c in selected_courses]

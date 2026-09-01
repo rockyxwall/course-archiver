@@ -66,11 +66,14 @@ def download_video(
         "quiet": True,
         "no_warnings": True,
         "continuedl": True,
-        "socket_timeout": 15,
-        "retries": 20,
+        "socket_timeout": 30,
+        "retries": 30,
         "fragment_retries": 50,
         "extractor_retries": 10,
         "file_access_retries": 10,
+        "skip_unavailable_fragments": False,
+        "abort_on_unavailable_fragment": True,
+        "hls_use_mpegts": True,
         "noprogress": True,
     }
 
@@ -80,6 +83,11 @@ def download_video(
                 ydl.download([video_url])
             break
         except Exception:
+            if out_path.exists():
+                try:
+                    out_path.unlink()
+                except OSError:
+                    pass
             if attempt == max_retries:
                 raise
             time.sleep(2 * attempt)
