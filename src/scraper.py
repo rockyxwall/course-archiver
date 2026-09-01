@@ -1,4 +1,4 @@
-"""Scraper: uses redwansmethod.com JSON API directly. No DOM scraping needed."""
+"""Scraper: uses JSON API directly. No DOM scraping needed."""
 import re
 import threading
 import time

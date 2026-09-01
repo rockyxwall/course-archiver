@@ -1,6 +1,6 @@
 # course-archiver
 
-Automated downloader for **redwansmethod.com** purchased courses.
+Automated downloader for purchased courses.
 Downloads videos (Bunny CDN HLS + YouTube) and PDF attachments.
 
 ## Quick Start

@@ -1,5 +1,5 @@
 """
-Course downloader for redwansmethod.com
+Course downloader
 
 Usage:
   uv run python main.py          # automation mode
@@ -249,7 +249,7 @@ def run_auto(cfg) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="redwansmethod.com course downloader")
+    parser = argparse.ArgumentParser(description="Course downloader")
     parser.add_argument("--train", action="store_true", help="Training mode: navigate site to save session")
     args = parser.parse_args()
 
