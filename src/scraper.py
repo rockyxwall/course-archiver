@@ -1,6 +1,7 @@
 """Scraper: uses redwansmethod.com JSON API directly. No DOM scraping needed."""
 import re
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -98,43 +99,112 @@ def get_course_tree(course: Course, cookies: dict) -> None:
         course.subjects.append(subject)
 
 
-def intercept_video_url(page: Page, video: Video, timeout_ms: int = 12_000) -> Optional[str]:
+def intercept_video_url(page: Page, video: Video, timeout_ms: int = 12_000) -> Optional[dict]:
     """
-    Navigate to watch page and capture the video URL.
-    - YouTube videos: capture youtu.be redirect URL -> return youtube.com/watch?v=ID
-    - Bunny videos: capture playlist.m3u8 URL
-    Returns None if nothing captured.
+    Navigate to watch page and capture the video URL and Referer header.
+    Handles:
+    - YouTube embeds: DOM iframe src, youtube-nocookie, embed, youtu.be
+    - Bunny CDN: playlist.m3u8 + Request Referer
     """
-    captured: Optional[str] = None
+    captured: Optional[dict] = None
     lock = threading.Lock()
 
-    if video.video_type == "youtube":
-        def handle_response(response):
-            nonlocal captured
-            # youtu.be/ID redirect fires as a network request
-            if "youtu.be/" in response.url and captured is None:
-                m = re.search(r"youtu\.be/([A-Za-z0-9_-]{11})", response.url)
-                if m:
-                    with lock:
-                        captured = f"https://www.youtube.com/watch?v={m.group(1)}"
-    else:
-        def handle_response(response):
-            nonlocal captured
-            if "playlist.m3u8" in response.url and captured is None:
-                with lock:
-                    captured = response.url
+    def handle_response(response):
+        nonlocal captured
+        url = response.url
+        if captured is not None:
+            return
+
+        # 1. Bunny CDN m3u8
+        if "playlist.m3u8" in url:
+            with lock:
+                referer = (
+                    response.request.headers.get("referer")
+                    or response.request.headers.get("Referer")
+                    or "https://iframe.mediadelivery.net/"
+                )
+                captured = {"url": url, "referer": referer}
+            return
+
+        # 2. YouTube network request
+        m = re.search(r"(?:youtu\.be/|youtube(?:-nocookie)?\.com/(?:embed/|watch\?v=))([A-Za-z0-9_-]{11})", url)
+        if m:
+            with lock:
+                captured = {
+                    "url": f"https://www.youtube.com/watch?v={m.group(1)}",
+                    "referer": "https://www.youtube.com/",
+                }
 
     page.on("response", handle_response)
     try:
         page.goto(video.watch_url)
-        # DOMContentLoaded is faster and won't hang on background analytic tracking
         page.wait_for_load_state("domcontentloaded", timeout=10_000)
-        page.wait_for_timeout(timeout_ms)
     except Exception:
-        # Fallback: if load state fails, just sleep to allow capturing anyway
-        page.wait_for_timeout(timeout_ms)
-    finally:
-        page.remove_listener("response", handle_response)
+        pass
 
+    # Poll up to timeout_ms: check network response OR DOM iframe/metadata
+    start = time.time()
+    while captured is None and (time.time() - start) * 1000 < timeout_ms:
+        try:
+            yt_id = page.evaluate(r"""() => {
+                // 1. Scan iframes
+                for (const iframe of document.querySelectorAll('iframe')) {
+                    const src = iframe.src || iframe.getAttribute('src') || '';
+                    const m = src.match(/(?:embed\/|v=|youtu\.be\/)([A-Za-z0-9_-]{11})/);
+                    if (m) return m[1];
+                    for (const attr of ['data-video-id', 'data-videoid', 'data-youtube-id', 'data-yt-id']) {
+                        const val = iframe.getAttribute(attr);
+                        if (val && /^[A-Za-z0-9_-]{11}$/.test(val)) return val;
+                    }
+                }
+
+                // 2. Scan video elements & parents
+                for (const video of document.querySelectorAll('video')) {
+                    let el = video;
+                    let depth = 0;
+                    while (el && depth < 6) {
+                        for (const attr of ['data-video-id', 'data-videoid', 'data-youtube-id', 'data-yt-id']) {
+                            const val = el.getAttribute && el.getAttribute(attr);
+                            if (val && /^[A-Za-z0-9_-]{11}$/.test(val)) return val;
+                        }
+                        el = el.parentElement;
+                        depth++;
+                    }
+                }
+
+                // 3. Scan meta tags
+                for (const sel of ['meta[property="og:video"]', 'meta[property="og:video:url"]', 'meta[name="twitter:player"]']) {
+                    const meta = document.querySelector(sel);
+                    if (meta) {
+                        const content = meta.getAttribute('content') || '';
+                        const m = content.match(/(?:embed\/|v=)([A-Za-z0-9_-]{11})/);
+                        if (m) return m[1];
+                    }
+                }
+
+                // 4. Scan script tags
+                for (const script of document.querySelectorAll('script')) {
+                    const text = script.textContent || '';
+                    const m = text.match(/["']([A-Za-z0-9_-]{11})["'].*youtube/i) || text.match(/youtube.*["']([A-Za-z0-9_-]{11})["']/i);
+                    if (m) return m[1];
+                }
+
+                return null;
+            }""")
+
+            if yt_id:
+                captured = {
+                    "url": f"https://www.youtube.com/watch?v={yt_id}",
+                    "referer": "https://www.youtube.com/",
+                }
+                break
+        except Exception:
+            pass
+
+        if captured:
+            break
+        page.wait_for_timeout(100)
+
+    page.remove_listener("response", handle_response)
     return captured
 

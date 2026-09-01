@@ -19,6 +19,7 @@ class Config:
     password: str
     output_dir: Path
     concurrent_fragments: int
+    concurrent_downloads: int
     video_quality: int
     session_path: Path
     selectors: dict
@@ -29,6 +30,7 @@ def load() -> Config:
     password = os.environ["PASSWORD"]
     output_dir = Path(os.environ.get("OUTPUT_DIR", "./downloads"))
     concurrent_fragments = int(os.environ.get("CONCURRENT_FRAGMENTS", "10"))
+    concurrent_downloads = int(os.environ.get("CONCURRENT_DOWNLOADS", "3"))
     video_quality = int(os.environ.get("VIDEO_QUALITY", "720"))
 
     RUNTIME_DIR.mkdir(exist_ok=True)
@@ -54,6 +56,7 @@ def load() -> Config:
         password=password,
         output_dir=output_dir,
         concurrent_fragments=concurrent_fragments,
+        concurrent_downloads=concurrent_downloads,
         video_quality=video_quality,
         session_path=session_path,
         selectors=selectors,

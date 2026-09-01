@@ -67,9 +67,10 @@ config/
 |---|---|---|
 | `EMAIL` | — | Login email |
 | `PASSWORD` | — | Login password |
-| `OUTPUT_DIR` | `./downloads` | Where files are saved |
-| `CONCURRENT_FRAGMENTS` | `10` | yt-dlp parallel chunk downloads |
-| `VIDEO_QUALITY` | `720` | Preferred height; escalates up if unavailable |
+| `OUTPUT_DIR` | `D:/Vidoes/Course` | Where files are saved |
+| `CONCURRENT_DOWNLOADS` | `3` | Parallel video downloads |
+| `CONCURRENT_FRAGMENTS` | `10` | yt-dlp parallel chunk downloads per video |
+| `VIDEO_QUALITY` | `1080` | Preferred height (e.g. 1080 $\to$ 720 $\to$ 480 $\to$ best) |
 
 ## Output Structure
 
@@ -78,9 +79,10 @@ OUTPUT_DIR/
   {Course}/
     {Subject}/
       {Chapter}/
-        01_Lecture 1.mp4
-        01_Lecture 1_Lecture.pdf
-        01_Lecture 1_Note.pdf
+        01_Lecture 1/
+          01_Lecture 1.mp4
+          Lecture.pdf
+          Note.pdf
 ```
 
 ## Re-login / Session Expired
