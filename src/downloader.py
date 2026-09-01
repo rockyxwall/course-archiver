@@ -17,6 +17,7 @@ def download_video(
     referer: str,
     concurrent: int,
     quality: int,
+    progress_hook=None,
 ) -> None:
     if out_path.exists():
         return
@@ -54,6 +55,7 @@ def download_video(
         "concurrent_fragment_downloads": concurrent,
         "merge_output_format": "mp4",
         "http_headers": headers,
+        "progress_hooks": [progress_hook] if progress_hook else [],
         "quiet": True,
         "no_warnings": True,
         "continuedl": True,

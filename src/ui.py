@@ -3,6 +3,16 @@ from pathlib import Path
 
 from InquirerPy import inquirer
 from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    DownloadColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeRemainingColumn,
+    TransferSpeedColumn,
+)
 from rich.table import Table
 from rich.tree import Tree
 
@@ -10,6 +20,19 @@ from src.scraper import Course
 
 console = Console()
 STATE_PATH = Path(__file__).parent.parent / ".runtime" / "last_selection.json"
+
+
+def make_progress() -> Progress:
+    return Progress(
+        SpinnerColumn(),
+        TextColumn("[bold cyan]{task.fields[name]}", justify="left"),
+        BarColumn(bar_width=24),
+        TaskProgressColumn(),
+        DownloadColumn(),
+        TransferSpeedColumn(),
+        TimeRemainingColumn(),
+        console=console,
+    )
 
 
 def _load_state() -> dict:
@@ -48,52 +71,69 @@ def select_courses(courses: list[Course]) -> list[Course]:
     state = _load_state()
     last_ids = set(state.get("courses", []))
 
-    choices = [{"name": c.name, "value": c} for c in courses]
-    defaults = [c for c in courses if c.id in last_ids] or None
+    choices = [
+        {
+            "name": c.name,
+            "value": c,
+            "enabled": (c.id in last_ids) if last_ids else True,
+        }
+        for c in courses
+    ]
 
     selected = inquirer.checkbox(
         message="Select courses to download (Space to toggle, Enter to confirm):",
         choices=choices,
-        default=defaults,
     ).execute()
 
-    if selected:
+    if selected is not None:
         state["courses"] = [c.id for c in selected]
         _save_state(state)
 
-    return selected
+    return selected or []
 
 
 def select_chapters(courses: list[Course]) -> list[Course]:
-    """Pick chapters per subject, with last order remembered."""
+    """Pick chapters per subject, with last selection and order remembered."""
     state = _load_state()
     saved_ch_map = state.get("chapters", {})
 
     for course in courses:
         for subject in course.subjects:
-            saved_ids = saved_ch_map.get(subject.id, [])
-            id_to_ch = {ch.id: ch for ch in subject.chapters}
+            saved_ids = saved_ch_map.get(subject.id, None)
 
-            # If previous order exists, preserve order in default
-            if saved_ids:
-                defaults = [id_to_ch[cid] for cid in saved_ids if cid in id_to_ch]
-                # Include any newly added chapters
-                defaults += [ch for ch in subject.chapters if ch.id not in saved_ids]
+            if saved_ids is not None:
+                # Prioritize previous order, then append any new chapters
+                id_to_ch = {ch.id: ch for ch in subject.chapters}
+                ordered_chapters = [id_to_ch[cid] for cid in saved_ids if cid in id_to_ch]
+                ordered_chapters += [ch for ch in subject.chapters if ch.id not in saved_ids]
+
+                saved_set = set(saved_ids)
+                choices = [
+                    {
+                        "name": f"{ch.name} ({len(ch.videos)} videos)",
+                        "value": ch,
+                        "enabled": (ch.id in saved_set),
+                    }
+                    for ch in ordered_chapters
+                ]
             else:
-                defaults = subject.chapters
+                choices = [
+                    {
+                        "name": f"{ch.name} ({len(ch.videos)} videos)",
+                        "value": ch,
+                        "enabled": True,
+                    }
+                    for ch in subject.chapters
+                ]
 
-            choices = [
-                {"name": f"{ch.name} ({len(ch.videos)} videos)", "value": ch}
-                for ch in subject.chapters
-            ]
             selected = inquirer.checkbox(
                 message=f"[{subject.name}] — pick chapters:",
                 choices=choices,
-                default=defaults,
             ).execute()
 
             if not selected:
                 subject.chapters = []
+                saved_ch_map[subject.id] = []
                 continue
 
             # Show numbered list for reordering
