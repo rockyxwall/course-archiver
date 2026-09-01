@@ -151,11 +151,20 @@ def run_auto(cfg) -> None:
                     progress.remove_task(task_id)
 
         for label, url, p_out in pdfs:
-            if not p_out.exists():
+            if not p_out.exists() and not p_out.with_suffix(".url").exists():
+                display_title = title if len(title) <= 22 else f"{title[:19]}..."
+                pdf_task = progress.add_task(
+                    f"[magenta]{display_title}",
+                    total=None,
+                    name=f"[{idx}/{total_count}] {display_title}",
+                    info=f"Downloading {label}.pdf...",
+                )
                 try:
                     downloader.download_pdf(url, p_out, ck)
                 except Exception as e:
                     errs.append(f"PDF '{title}' ({label}) failed: {e}")
+                finally:
+                    progress.remove_task(pdf_task)
 
         progress.advance(overall_task)
         curr_overall = progress.tasks[overall_task].completed

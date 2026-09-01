@@ -101,6 +101,8 @@ def print_session_status(courses: list[Course], output_dir: Path) -> tuple[int, 
     tree = Tree("[bold cyan]Previous Session & Download Status[/bold cyan]")
     total_videos = 0
     done_videos = 0
+    total_pdfs = 0
+    done_pdfs = 0
 
     for course in courses:
         c_branch = tree.add(f"[bold green]{course.name}[/bold green]")
@@ -115,9 +117,37 @@ def print_session_status(courses: list[Course], output_dir: Path) -> tuple[int, 
                         chapter.name, video.number, video.title,
                         f"{video.number:02d}_{video.title}.mp4"
                     )
+                    # Check PDFs for this video
+                    pdf_urls = [
+                        (lbl, url)
+                        for lbl, url in [
+                            ("Lecture", video.lecture_sheet_url),
+                            ("Note", video.note_url),
+                            ("Practice", video.practice_sheet_url),
+                            ("Solve", video.solve_sheet_url),
+                        ] if url
+                    ]
+                    v_pdfs_total = len(pdf_urls)
+                    v_pdfs_done = 0
+                    for lbl, url in pdf_urls:
+                        p_out = downloader.build_out_path(
+                            output_dir, course.name, subject.name,
+                            chapter.name, video.number, video.title, f"{lbl}.pdf"
+                        )
+                        if p_out.exists() or p_out.with_suffix(".url").exists():
+                            v_pdfs_done += 1
+
+                    total_pdfs += v_pdfs_total
+                    done_pdfs += v_pdfs_done
+
+                    pdf_tag = f" · {v_pdfs_done}/{v_pdfs_total} PDFs" if v_pdfs_total > 0 else ""
+
                     if video_out.exists():
-                        done_videos += 1
-                        ch_branch.add(f"[green]✓ {video.number:02d}. {video.title}[/green] [dim](Downloaded)[/dim]")
+                        if v_pdfs_total == 0 or v_pdfs_done == v_pdfs_total:
+                            done_videos += 1
+                            ch_branch.add(f"[green]✓ {video.number:02d}. {video.title}[/green] [dim](Downloaded{pdf_tag})[/dim]")
+                        else:
+                            ch_branch.add(f"[yellow]⏳ {video.number:02d}. {video.title}[/yellow] [yellow](Video OK · {v_pdfs_done}/{v_pdfs_total} PDFs)[/yellow]")
                     else:
                         temp_dir = video_out.parent / ".temp"
                         if temp_dir.exists():
@@ -142,16 +172,17 @@ def print_session_status(courses: list[Course], output_dir: Path) -> tuple[int, 
                             if total_size > 0:
                                 size_str = fmt_bytes(total_size)
                                 frag_str = f" · {frag_count} frags" if frag_count > 0 else ""
-                                ch_branch.add(f"[yellow]⏳ {video.number:02d}. {video.title}[/yellow] [italic yellow](Partially downloaded: {size_str}{frag_str})[/italic yellow]")
+                                ch_branch.add(f"[yellow]⏳ {video.number:02d}. {video.title}[/yellow] [italic yellow]({size_str}{frag_str}{pdf_tag})[/italic yellow]")
                             else:
-                                ch_branch.add(f"[dim]⏳ {video.number:02d}. {video.title} (Pending)[/dim]")
+                                ch_branch.add(f"[dim]⏳ {video.number:02d}. {video.title} (Pending{pdf_tag})[/dim]")
                         else:
-                            ch_branch.add(f"[dim]⏳ {video.number:02d}. {video.title} (Pending)[/dim]")
+                            ch_branch.add(f"[dim]⏳ {video.number:02d}. {video.title} (Pending{pdf_tag})[/dim]")
 
     console.print()
     console.print(tree)
     rem = total_videos - done_videos
-    console.print(f"\n[bold]Status:[/bold] [green]{done_videos}[/green] completed, [yellow]{rem}[/yellow] remaining of [cyan]{total_videos}[/cyan] total videos.\n")
+    pdf_summary = f" · [cyan]{done_pdfs}/{total_pdfs}[/cyan] PDFs" if total_pdfs > 0 else ""
+    console.print(f"\n[bold]Status:[/bold] [green]{done_videos}[/green] completed, [yellow]{rem}[/yellow] remaining of [cyan]{total_videos}[/cyan] total videos{pdf_summary}.\n")
     return total_videos, done_videos
 
 
