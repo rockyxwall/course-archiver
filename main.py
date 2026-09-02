@@ -106,9 +106,10 @@ def run_auto(cfg) -> None:
         info=f"0/{total_count} completed",
     )
 
-    def _worker(idx, title, kind, v_url, referer, v_out, pdfs, ck, frags, qual):
+    def _worker(idx, title, chapter_name, kind, v_url, referer, v_out, pdfs, ck, frags, qual):
         errs = []
-        display_title = title if len(title) <= 22 else f"{title[:19]}..."
+        item_label = f"[{chapter_name}] {title}"
+        display_title = item_label if len(item_label) <= 28 else f"{item_label[:25]}..."
         task_id = progress.add_task(
             f"[cyan]{display_title}",
             total=None,
@@ -172,7 +173,7 @@ def run_auto(cfg) -> None:
                         postprocessor_hook=post_hook,
                     )
                 except Exception as e:
-                    errs.append(f"Video '{title}' failed: {e}")
+                    errs.append(f"Video '[{chapter_name}] {title}' failed: {e}")
 
             # 2. PDF Attachments (in the same progress bar)
             needed_pdfs = [(lbl, u, p) for lbl, u, p in pdfs if not p.exists() and not p.with_suffix(".url").exists()]
@@ -187,7 +188,7 @@ def run_auto(cfg) -> None:
                 try:
                     downloader.download_pdf(url, p_out, ck)
                 except Exception as e:
-                    errs.append(f"PDF '{title}' ({label}) failed: {e}")
+                    errs.append(f"PDF '[{chapter_name}] {title}' ({label}) failed: {e}")
 
         finally:
             if task_id is not None:
@@ -196,7 +197,7 @@ def run_auto(cfg) -> None:
         progress.advance(overall_task)
         curr_overall = progress.tasks[overall_task].completed
         progress.update(overall_task, info=f"{int(curr_overall)}/{total_count} completed")
-        return title, kind, errs
+        return title, chapter_name, kind, errs
 
     futures = set()
     skipped = 0
@@ -239,40 +240,49 @@ def run_auto(cfg) -> None:
                                 progress.advance(overall_task)
                                 curr_overall = progress.tasks[overall_task].completed
                                 progress.update(overall_task, info=f"{int(curr_overall)}/{total_count} completed")
-                                progress.console.print(f"[dim][{idx}/{total_count}] Skipped (already exists): {video.title}[/dim]")
+                                progress.console.print(f"[dim][{idx}/{total_count}] Skipped (already exists): [{chapter.name}] {video.title}[/dim]")
                                 continue
 
                             # Throttle interception to active worker capacity
                             while len(futures) >= cfg.concurrent_downloads:
                                 done, futures = wait(futures, return_when=FIRST_COMPLETED)
                                 for fut in done:
-                                    t, k, errs = fut.result()
+                                    t, ch_n, k, errs = fut.result()
                                     if errs:
                                         failed += 1
                                         for err in errs:
                                             progress.console.print(f"[red]  {err}[/red]")
                                     else:
                                         completed += 1
-                                        progress.console.print(f"[green]✓ Completed {k} [{cfg.video_quality}p]: {t}[/green]")
+                                        progress.console.print(f"[green]✓ Completed {k} [{cfg.video_quality}p]: [{ch_n}] {t}[/green]")
 
                             # JIT URL interception if video download needed
                             video_url = None
                             referer = ""
                             kind = "YT" if video.video_type == "youtube" else "Bunny"
                             if video_needed:
-                                progress.console.print(f"[{idx}/{total_count}] [cyan]Intercepting & queuing {kind} [{cfg.video_quality}p]:[/cyan] {video.title}")
-                                stream_info = scraper.intercept_video_url(page, video)
-                                if stream_info:
-                                    video_url = stream_info.get("url")
-                                    referer = stream_info.get("referer", "")
-                                else:
-                                    progress.console.print(f"[yellow]  Warning: No stream URL captured for {video.title}[/yellow]")
+                                intercept_task = progress.add_task(
+                                    f"[cyan][{idx}/{total_count}] Intercepting",
+                                    total=None,
+                                    name=f"[{idx}/{total_count}] Intercepting {kind} [{cfg.video_quality}p]",
+                                    info=f"[{chapter.name}] {video.title}",
+                                )
+                                try:
+                                    stream_info = scraper.intercept_video_url(page, video)
+                                    if stream_info:
+                                        video_url = stream_info.get("url")
+                                        referer = stream_info.get("referer", "")
+                                    else:
+                                        progress.console.print(f"[yellow]  Warning: No stream URL captured for [{chapter.name}] {video.title}[/yellow]")
+                                finally:
+                                    progress.remove_task(intercept_task)
 
                             # Submit download task
                             fut = executor.submit(
                                 _worker,
                                 idx,
                                 video.title,
+                                chapter.name,
                                 kind,
                                 video_url,
                                 referer,
@@ -289,14 +299,14 @@ def run_auto(cfg) -> None:
 
                 # Drain remaining downloads
                 for fut in wait(futures).done:
-                    t, k, errs = fut.result()
+                    t, ch_n, k, errs = fut.result()
                     if errs:
                         failed += 1
                         for err in errs:
                             progress.console.print(f"[red]  {err}[/red]")
                     else:
                         completed += 1
-                        progress.console.print(f"[green]✓ Completed {k} [{cfg.video_quality}p]: {t}[/green]")
+                        progress.console.print(f"[green]✓ Completed {k} [{cfg.video_quality}p]: [{ch_n}] {t}[/green]")
     except KeyboardInterrupt:
         ui.console.print("\n[yellow]Operation cancelled by user. Exiting...[/yellow]")
         os._exit(0)

@@ -14,6 +14,21 @@ def _safe_name(name: str) -> str:
     return re.sub(r'[\\/:*?"<>|]', "_", name).strip()
 
 
+class _YDLLogger:
+    """Suppress raw yt-dlp stderr logs during retries; fatal errors raise exceptions."""
+    def debug(self, msg: str) -> None:
+        pass
+
+    def info(self, msg: str) -> None:
+        pass
+
+    def warning(self, msg: str) -> None:
+        pass
+
+    def error(self, msg: str) -> None:
+        pass
+
+
 def download_video(
     video_url: str,
     out_path: Path,
@@ -51,6 +66,7 @@ def download_video(
         headers["Referer"] = "https://iframe.mediadelivery.net/"
 
     ydl_opts = {
+        "logger": _YDLLogger(),
         "paths": {
             "home": str(out_path.parent),
             "temp": str(temp_dir),
