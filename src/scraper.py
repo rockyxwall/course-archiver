@@ -59,7 +59,17 @@ def get_session_info(session_cookies: dict) -> tuple[str, str]:
     r = req.get("https://www.redwansmethod.com/api/auth/session", cookies=session_cookies, timeout=10)
     r.raise_for_status()
     data = r.json()
+    if not isinstance(data, dict) or "user" not in data or not data["user"]:
+        raise ValueError("Invalid or expired session: no user in session response.")
     return data["user"]["mongoId"], data["user"]["accessToken"]
+
+
+def is_session_valid(session_cookies: dict) -> bool:
+    try:
+        user_id, token = get_session_info(session_cookies)
+        return bool(user_id and token)
+    except Exception:
+        return False
 
 
 def get_all_courses(cookies: dict) -> list[Course]:

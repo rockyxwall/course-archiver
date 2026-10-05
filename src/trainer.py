@@ -56,12 +56,15 @@ def run(
     page.on("framenavigated", _on_framenavigated)
 
     # Auth: login if needed (skipped when session already valid)
-    from src import auth
-    session_exists = (Path(__file__).parent.parent / ".runtime" / "session.json").exists()
-    if session_exists:
-        print("\n[trainer] Session found — skipping login, navigating to profile...")
+    from src import auth, scraper
+    cookies = auth.load_session_cookies(Path(__file__).parent.parent / ".runtime" / "session.json")
+    if scraper.is_session_valid(cookies):
+        print("\n[trainer] Session verified — skipping login, navigating to profile...")
         page.goto(sel["login"]["url"])
-        page.wait_for_load_state("networkidle")
+        try:
+            page.wait_for_load_state("networkidle", timeout=10_000)
+        except Exception:
+            pass
     else:
         print("\n[trainer] Logging in...")
         auth.login(page, sel, email, password)

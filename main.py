@@ -25,10 +25,8 @@ def _make_context(playwright, cfg, headless: bool):
     browser = playwright.chromium.launch(headless=headless)
     if cfg.session_path.exists():
         context = browser.new_context(storage_state=str(cfg.session_path))
-        ui.console.print("[green]Session restored from session.json[/green]")
     else:
         context = browser.new_context()
-        ui.console.print("[yellow]No session found — will log in[/yellow]")
     return browser, context
 
 
@@ -55,21 +53,30 @@ def run_train(cfg) -> None:
 def run_auto(cfg) -> None:
     ui.console.rule("[bold cyan]Automation Mode[/bold cyan]")
 
-    # ── Phase 1: get cookies (playwright open briefly, then closed) ──────────
-    with sync_playwright() as p:
-        headless = cfg.session_path.exists()
-        browser, context = _make_context(p, cfg, headless=headless)
-        try:
-            if not cfg.session_path.exists():
+    # ── Phase 1: ensure valid session & cookies ──────────────────────────────
+    cookies = auth.load_session_cookies(cfg.session_path)
+    if cookies and scraper.is_session_valid(cookies):
+        ui.console.print("[green]Session restored and verified from session.json[/green]")
+    else:
+        if cfg.session_path.exists():
+            ui.console.print("[yellow]Session expired or invalid — re-authenticating...[/yellow]")
+        else:
+            ui.console.print("[yellow]No session found — logging in...[/yellow]")
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context()
+            try:
                 page = context.new_page()
-                ui.console.print("Logging in...")
                 auth.login(page, cfg.selectors, cfg.email, cfg.password)
                 page.close()
-            auth.save_session(context, cfg.session_path)
-            cookies = auth.get_requests_cookies(context)
-            cookie_str = auth.build_cookie_str(context)
-        finally:
-            browser.close()
+                cookies = auth.get_requests_cookies(context)
+                if not scraper.is_session_valid(cookies):
+                    raise RuntimeError("Login completed but session token is invalid. Please check your credentials in .env.")
+                auth.save_session(context, cfg.session_path)
+                ui.console.print("[green]Login successful, session saved to session.json[/green]")
+            finally:
+                browser.close()
 
     # ── Phase 2: API fetch + interactive selection (no playwright running) ───
     ui.console.print("Fetching purchased courses via API...")
