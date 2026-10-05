@@ -2,7 +2,9 @@ import json
 from pathlib import Path
 
 from InquirerPy import inquirer
+from InquirerPy.utils import get_style
 from rich.console import Console
+from rich.panel import Panel
 from rich.progress import (
     BarColumn,
     DownloadColumn,
@@ -18,8 +20,27 @@ from rich.tree import Tree
 
 from src.scraper import Course
 
-console = Console()
+console = Console(force_terminal=True, legacy_windows=False)
 STATE_PATH = Path(__file__).parent.parent / ".runtime" / "last_selection.json"
+
+TUI_STYLE = get_style(
+    {
+        "questionmark": "#e5c07b bold",
+        "answermark": "#98c379 bold",
+        "answer": "#98c379 bold",
+        "input": "#abb2bf",
+        "question": "bold white",
+        "instruction": "#5c6370 italic",
+        "pointer": "#61afef bold",
+        "checkbox": "#98c379 bold",
+        "separator": "#5c6370",
+        "fuzzy_prompt": "#c678dd bold",
+        "fuzzy_info": "#abb2bf",
+        "fuzzy_border": "#4b5263",
+        "fuzzy_match": "#e5c07b bold",
+    },
+    style_override=False,
+)
 
 
 def fmt_bytes(n: int | float | None) -> str:
@@ -78,8 +99,6 @@ def _save_state(state: dict) -> None:
     except Exception:
         pass
 
-
-from rich.panel import Panel
 
 def print_course_tree(courses: list[Course]) -> None:
     tree = Tree("[bold cyan]Selected Courses[/bold cyan]")
@@ -182,7 +201,13 @@ def print_session_status(courses: list[Course], output_dir: Path) -> tuple[int, 
     console.print(tree)
     rem = total_videos - done_videos
     pdf_summary = f" · [cyan]{done_pdfs}/{total_pdfs}[/cyan] PDFs" if total_pdfs > 0 else ""
-    console.print(f"\n[bold]Status:[/bold] [green]{done_videos}[/green] completed, [yellow]{rem}[/yellow] remaining of [cyan]{total_videos}[/cyan] total videos{pdf_summary}.\n")
+    summary_text = (
+        f"[green]{done_videos}[/green] completed · "
+        f"[yellow]{rem}[/yellow] remaining · "
+        f"[cyan]{total_videos}[/cyan] total videos{pdf_summary}"
+    )
+    console.print()
+    console.print(Panel(summary_text, title="[bold cyan]Download Status[/bold cyan]", border_style="cyan", expand=False))
     return total_videos, done_videos
 
 
@@ -217,15 +242,11 @@ def select_workflow(all_courses: list[Course], cookies: dict, scraper, output_di
                 choice = inquirer.select(
                     message="Resume previous selection?",
                     choices=[
-                        {
-                            "name": f"▶ Yes — Resume & download remaining ({rem} videos)",
-                            "value": "resume",
-                        },
-                        {
-                            "name": "✎ No  — Select fresh courses/chapters",
-                            "value": "fresh",
-                        },
+                        {"name": f"▶ Yes — Resume & download remaining ({rem} videos)", "value": "resume"},
+                        {"name": "✎ No  — Select fresh courses/chapters", "value": "fresh"},
                     ],
+                    border=True,
+                    style=TUI_STYLE,
                 ).execute()
 
                 if choice == "resume":
@@ -236,6 +257,8 @@ def select_workflow(all_courses: list[Course], cookies: dict, scraper, output_di
     selected_courses = inquirer.checkbox(
         message="Select courses to download (Space to toggle, Enter to confirm):",
         choices=choices,
+        border=True,
+        style=TUI_STYLE,
     ).execute()
 
     if not selected_courses:
@@ -255,8 +278,10 @@ def select_workflow(all_courses: list[Course], cookies: dict, scraper, output_di
                 for s in course.subjects
             ]
             selected_subjects = inquirer.checkbox(
-                message=f"[{course.name}] Select sections (Space to select, Enter to confirm):",
+                message=f"[{course.name}] Select sections (Space to toggle, Enter to confirm):",
                 choices=subj_choices,
+                border=True,
+                style=TUI_STYLE,
             ).execute()
         else:
             selected_subjects = course.subjects
@@ -273,8 +298,10 @@ def select_workflow(all_courses: list[Course], cookies: dict, scraper, output_di
                 for ch in subject.chapters
             ]
             selected_chs = inquirer.checkbox(
-                message=f"[{subject.name}] — pick chapters:",
+                message=f"[{subject.name}] Pick chapters (Space to toggle, Enter to confirm):",
                 choices=choices,
+                border=True,
+                style=TUI_STYLE,
             ).execute()
 
             if not selected_chs:
@@ -289,6 +316,7 @@ def select_workflow(all_courses: list[Course], cookies: dict, scraper, output_di
 
             raw = inquirer.text(
                 message="Enter new order (e.g. 3,1,2) or Enter to keep:",
+                style=TUI_STYLE,
             ).execute().strip()
 
             if raw:
@@ -312,7 +340,7 @@ def select_workflow(all_courses: list[Course], cookies: dict, scraper, output_di
 
 
 def print_summary(total: int, completed: int, skipped: int, failed: int, output_dir) -> None:
-    table = Table(title="Download Summary", show_lines=True)
+    table = Table(title="Download Summary", show_lines=True, header_style="bold cyan")
     table.add_column("Metric", style="cyan")
     table.add_column("Count / Path", style="bold")
     table.add_row("Total Items", str(total))
@@ -321,7 +349,7 @@ def print_summary(total: int, completed: int, skipped: int, failed: int, output_
     table.add_row("Failed", f"[red]{failed}[/red]" if failed else "[green]0[/green]")
     table.add_row("Save Directory", f"[cyan]{output_dir}[/cyan]")
     console.print()
-    console.print(table)
+    console.print(Panel(table, border_style="green", expand=False))
 
 
 
