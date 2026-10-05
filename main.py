@@ -80,6 +80,7 @@ def run_auto(cfg) -> None:
 
     # ── Phase 2: API fetch + interactive selection (no playwright running) ───
     ui.console.print("Fetching purchased courses via API...")
+    _, token = scraper.get_session_info(cookies)
     courses = scraper.get_all_courses(cookies)
     if not courses:
         ui.console.print("[red]No courses found.[/red]")
@@ -113,7 +114,7 @@ def run_auto(cfg) -> None:
         info=f"0/{total_count} completed",
     )
 
-    def _worker(idx, title, chapter_name, kind, v_url, referer, v_out, pdfs, ck, frags, qual):
+    def _worker(idx, title, chapter_name, kind, v_url, referer, v_out, pdfs, ck, frags, qual, fallback_url=None):
         errs = []
         item_label = f"[{chapter_name}] {title}"
         display_title = item_label if len(item_label) <= 28 else f"{item_label[:25]}..."
@@ -180,7 +181,18 @@ def run_auto(cfg) -> None:
                         postprocessor_hook=post_hook,
                     )
                 except Exception as e:
-                    errs.append(f"Video '[{chapter_name}] {title}' failed: {e}")
+                    if fallback_url and fallback_url != v_url:
+                        try:
+                            downloader.download_video(
+                                fallback_url, v_out, "https://www.youtube.com/", frags, qual,
+                                progress_hook=ydl_hook,
+                                postprocessor_hook=post_hook,
+                            )
+                            kind = f"{kind}->YT"
+                        except Exception as fb_e:
+                            errs.append(f"Video '[{chapter_name}] {title}' failed: {e} | Fallback failed: {fb_e}")
+                    else:
+                        errs.append(f"Video '[{chapter_name}] {title}' failed: {e}")
 
             # 2. PDF Attachments (in the same progress bar)
             needed_pdfs = [(lbl, u, p) for lbl, u, p in pdfs if not p.exists() and not p.with_suffix(".url").exists()]
@@ -214,95 +226,78 @@ def run_auto(cfg) -> None:
     try:
         with progress:
             with ThreadPoolExecutor(max_workers=cfg.concurrent_downloads) as executor:
-                with sync_playwright() as p:
-                    browser, context = _make_context(p, cfg, headless=True)
-                    page = context.new_page()
+                for idx, (course, subject, chapter, video) in enumerate(all_items, 1):
+                    # Check disk first
+                    video_filename = f"{video.number:02d}_{video.title}.mp4"
+                    video_out = downloader.build_out_path(
+                        cfg.output_dir, course.name, subject.name,
+                        chapter.name, video.number, video.title, video_filename
+                    )
+                    pdf_tasks = [
+                        (label, url, downloader.build_out_path(
+                            cfg.output_dir, course.name, subject.name,
+                            chapter.name, video.number, video.title, f"{label}.pdf"
+                        ))
+                        for label, url in [
+                            ("Lecture", video.lecture_sheet_url),
+                            ("Note", video.note_url),
+                            ("Practice", video.practice_sheet_url),
+                            ("Solve", video.solve_sheet_url),
+                        ] if url
+                    ]
 
-                    try:
-                        for idx, (course, subject, chapter, video) in enumerate(all_items, 1):
-                            # Check disk first
-                            video_filename = f"{video.number:02d}_{video.title}.mp4"
-                            video_out = downloader.build_out_path(
-                                cfg.output_dir, course.name, subject.name,
-                                chapter.name, video.number, video.title, video_filename
-                            )
-                            pdf_tasks = [
-                                (label, url, downloader.build_out_path(
-                                    cfg.output_dir, course.name, subject.name,
-                                    chapter.name, video.number, video.title, f"{label}.pdf"
-                                ))
-                                for label, url in [
-                                    ("Lecture", video.lecture_sheet_url),
-                                    ("Note", video.note_url),
-                                    ("Practice", video.practice_sheet_url),
-                                    ("Solve", video.solve_sheet_url),
-                                ] if url
-                            ]
+                    video_needed = not video_out.exists()
+                    pdfs_needed = [(l, u, o) for l, u, o in pdf_tasks if not o.exists()]
 
-                            video_needed = not video_out.exists()
-                            pdfs_needed = [(l, u, o) for l, u, o in pdf_tasks if not o.exists()]
+                    if not video_needed and not pdfs_needed:
+                        skipped += 1
+                        progress.advance(overall_task)
+                        curr_overall = progress.tasks[overall_task].completed
+                        progress.update(overall_task, info=f"{int(curr_overall)}/{total_count} completed")
+                        progress.console.print(f"[dim][{idx}/{total_count}] Skipped (already exists): [{chapter.name}] {video.title}[/dim]")
+                        continue
 
-                            if not video_needed and not pdfs_needed:
-                                skipped += 1
-                                progress.advance(overall_task)
-                                curr_overall = progress.tasks[overall_task].completed
-                                progress.update(overall_task, info=f"{int(curr_overall)}/{total_count} completed")
-                                progress.console.print(f"[dim][{idx}/{total_count}] Skipped (already exists): [{chapter.name}] {video.title}[/dim]")
-                                continue
+                    # Throttle downloads to active worker capacity
+                    while len(futures) >= cfg.concurrent_downloads:
+                        done, futures = wait(futures, return_when=FIRST_COMPLETED)
+                        for fut in done:
+                            t, ch_n, k, errs = fut.result()
+                            if errs:
+                                failed += 1
+                                for err in errs:
+                                    progress.console.print(f"[red]  {err}[/red]")
+                            else:
+                                completed += 1
+                                progress.console.print(f"[green]✓ Completed {k} [{cfg.video_quality}p]: [{ch_n}] {t}[/green]")
 
-                            # Throttle interception to active worker capacity
-                            while len(futures) >= cfg.concurrent_downloads:
-                                done, futures = wait(futures, return_when=FIRST_COMPLETED)
-                                for fut in done:
-                                    t, ch_n, k, errs = fut.result()
-                                    if errs:
-                                        failed += 1
-                                        for err in errs:
-                                            progress.console.print(f"[red]  {err}[/red]")
-                                    else:
-                                        completed += 1
-                                        progress.console.print(f"[green]✓ Completed {k} [{cfg.video_quality}p]: [{ch_n}] {t}[/green]")
+                    # Fast stream resolution via direct REST API in ~50ms (no browser!)
+                    video_url = None
+                    referer = ""
+                    kind = "YT" if video.video_type == "youtube" else "Bunny"
+                    if video_needed:
+                        video_url, referer = scraper.resolve_stream(video, cookies, token)
+                        if video_url and "youtu" in video_url:
+                            kind = "YT"
+                        elif not video_url:
+                            progress.console.print(f"[yellow]  Warning: No stream URL could be resolved for [{chapter.name}] {video.title}[/yellow]")
 
-                            # JIT URL interception if video download needed
-                            video_url = None
-                            referer = ""
-                            kind = "YT" if video.video_type == "youtube" else "Bunny"
-                            if video_needed:
-                                intercept_task = progress.add_task(
-                                    f"[cyan][{idx}/{total_count}] Intercepting",
-                                    total=None,
-                                    name=f"[{idx}/{total_count}] Intercepting {kind} [{cfg.video_quality}p]",
-                                    info=f"[{chapter.name}] {video.title}",
-                                )
-                                try:
-                                    stream_info = scraper.intercept_video_url(page, video)
-                                    if stream_info:
-                                        video_url = stream_info.get("url")
-                                        referer = stream_info.get("referer", "")
-                                    else:
-                                        progress.console.print(f"[yellow]  Warning: No stream URL captured for [{chapter.name}] {video.title}[/yellow]")
-                                finally:
-                                    progress.remove_task(intercept_task)
-
-                            # Submit download task
-                            fut = executor.submit(
-                                _worker,
-                                idx,
-                                video.title,
-                                chapter.name,
-                                kind,
-                                video_url,
-                                referer,
-                                video_out if video_needed else None,
-                                pdfs_needed,
-                                cookies,
-                                cfg.concurrent_fragments,
-                                cfg.video_quality,
-                            )
-                            futures.add(fut)
-
-                    finally:
-                        browser.close()
+                    # Submit download task
+                    fut = executor.submit(
+                        _worker,
+                        idx,
+                        video.title,
+                        chapter.name,
+                        kind,
+                        video_url,
+                        referer,
+                        video_out if video_needed else None,
+                        pdfs_needed,
+                        cookies,
+                        cfg.concurrent_fragments,
+                        cfg.video_quality,
+                        fallback_url=video.youtube_url,
+                    )
+                    futures.add(fut)
 
                 # Drain remaining downloads
                 for fut in wait(futures).done:

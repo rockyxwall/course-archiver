@@ -19,6 +19,7 @@ class Video:
     video_type: str          # "youtube" | "bunny" | other
     bunny_id: str
     watch_url: str
+    youtube_url: Optional[str] = None
     lecture_sheet_url: Optional[str] = None
     note_url: Optional[str] = None
     practice_sheet_url: Optional[str] = None
@@ -101,6 +102,7 @@ def get_course_tree(course: Course, cookies: dict) -> None:
                     video_type=v.get("videoType", "bunny").lower(),
                     bunny_id=v.get("bunnyVideoId", ""),
                     watch_url=f"https://www.redwansmethod.com/watch/{v['_id']}",
+                    youtube_url=v.get("videoYoutubeURL") or None,
                     lecture_sheet_url=v.get("videoLectureSheetURL") or None,
                     note_url=v.get("videoNoteURL") or None,
                     practice_sheet_url=v.get("videoPracticeSheetURL") or None,
@@ -110,13 +112,42 @@ def get_course_tree(course: Course, cookies: dict) -> None:
         course.subjects.append(subject)
 
 
+def resolve_stream(video: Video, cookies: dict, token: str) -> tuple[Optional[str], str]:
+    """Resolve stream URL in ~50ms using existing _api without launching browser."""
+    # 1. Direct YouTube video
+    if video.video_type == "youtube" and video.youtube_url:
+        return video.youtube_url, "https://www.youtube.com/"
+
+    # 2. Bunny CDN via signed-playback endpoint
+    if video.bunny_id or video.video_type in ("bunny", "server"):
+        try:
+            data = _api(f"/videos/signed-playback/{video.id}", cookies, token)
+            cdn_url = data.get("url") if isinstance(data, dict) else None
+            if cdn_url:
+                # Fast HEAD check (3s timeout) to verify file exists on CDN (rejects 404s)
+                if req.head(cdn_url, headers={"Referer": "https://www.redwansmethod.com/"}, timeout=3).ok:
+                    return cdn_url, "https://www.redwansmethod.com/"
+        except Exception:
+            pass
+
+    # 3. Fallback to YouTube if known
+    if video.youtube_url:
+        return video.youtube_url, "https://www.youtube.com/"
+
+    return None, ""
+
+
 def intercept_video_url(page: Page, video: Video, timeout_ms: int = 12_000) -> Optional[dict]:
     """
     Navigate to watch page and capture the video URL and Referer header.
     Handles:
-    - YouTube embeds: DOM iframe src, youtube-nocookie, embed, youtu.be
-    - Bunny CDN: playlist.m3u8 + Request Referer
+    - Direct YouTube videos (skips Playwright if youtube_url known)
+    - Bunny CDN: playlist.m3u8 (validating response.ok, rejecting 404)
+    - Automatic fallback to YouTube if Bunny returns 404 or fails
     """
+    if video.video_type == "youtube" and video.youtube_url:
+        return {"url": video.youtube_url, "referer": "https://www.youtube.com/"}
+
     captured: Optional[dict] = None
     lock = threading.Lock()
 
@@ -126,16 +157,24 @@ def intercept_video_url(page: Page, video: Video, timeout_ms: int = 12_000) -> O
         if captured is not None:
             return
 
-        # 1. Bunny CDN m3u8
+        # 1. Bunny CDN m3u8 - only accept successful response
         if "playlist.m3u8" in url:
-            with lock:
-                referer = (
-                    response.request.headers.get("referer")
-                    or response.request.headers.get("Referer")
-                    or "https://iframe.mediadelivery.net/"
-                )
-                captured = {"url": url, "referer": referer}
-            return
+            if response.ok:
+                with lock:
+                    referer = (
+                        response.request.headers.get("referer")
+                        or response.request.headers.get("Referer")
+                        or "https://www.redwansmethod.com/"
+                    )
+                    captured = {"url": url, "referer": referer}
+                return
+            elif response.status == 404 and video.youtube_url:
+                with lock:
+                    captured = {
+                        "url": video.youtube_url,
+                        "referer": "https://www.youtube.com/",
+                    }
+                return
 
         # 2. YouTube network request
         m = re.search(r"(?:youtu\.be/|youtube(?:-nocookie)?\.com/(?:embed/|watch\?v=))([A-Za-z0-9_-]{11})", url)
@@ -217,5 +256,10 @@ def intercept_video_url(page: Page, video: Video, timeout_ms: int = 12_000) -> O
         page.wait_for_timeout(100)
 
     page.remove_listener("response", handle_response)
+    if captured is None and video.youtube_url:
+        captured = {
+            "url": video.youtube_url,
+            "referer": "https://www.youtube.com/",
+        }
     return captured
 

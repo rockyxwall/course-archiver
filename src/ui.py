@@ -220,36 +220,35 @@ def select_workflow(all_courses: list[Course], cookies: dict, scraper, output_di
     if saved_course_ids:
         matched_courses = [c for c in all_courses if c.id in saved_course_ids]
         if matched_courses:
-            # Populate course tree to inspect real on-disk status
-            console.print("\n[dim]Checking previous session status...[/dim]")
-            for course in matched_courses:
-                scraper.get_course_tree(course, cookies)
-                for subject in course.subjects:
-                    if subject.id in saved_ch_map:
-                        saved_ids = saved_ch_map[subject.id]
-                        id_to_ch = {ch.id: ch for ch in subject.chapters}
-                        ordered = [id_to_ch[cid] for cid in saved_ids if cid in id_to_ch]
-                        subject.chapters = ordered
-                    else:
-                        subject.chapters = []
-                course.subjects = [s for s in course.subjects if s.chapters]
-            matched_courses = [c for c in matched_courses if c.subjects]
+            course_titles = " · ".join(c.name for c in matched_courses)
+            display_titles = f"{course_titles[:50]}..." if len(course_titles) > 50 else course_titles
+            choice = inquirer.select(
+                message=f"Previous session found ({len(matched_courses)} course(s)). Resume?",
+                choices=[
+                    {"name": f"▶ Yes — Resume ({display_titles})", "value": "resume"},
+                    {"name": "✎ No  — Select fresh courses/chapters", "value": "fresh"},
+                ],
+                border=True,
+                style=TUI_STYLE,
+            ).execute()
 
-            if matched_courses:
-                total, done = print_session_status(matched_courses, output_dir)
-                rem = total - done
+            if choice == "resume":
+                console.print("\n[dim]Checking on-disk download status...[/dim]")
+                for course in matched_courses:
+                    scraper.get_course_tree(course, cookies)
+                    for subject in course.subjects:
+                        if subject.id in saved_ch_map:
+                            saved_ids = saved_ch_map[subject.id]
+                            id_to_ch = {ch.id: ch for ch in subject.chapters}
+                            ordered = [id_to_ch[cid] for cid in saved_ids if cid in id_to_ch]
+                            subject.chapters = ordered
+                        else:
+                            subject.chapters = []
+                    course.subjects = [s for s in course.subjects if s.chapters]
+                matched_courses = [c for c in matched_courses if c.subjects]
 
-                choice = inquirer.select(
-                    message="Resume previous selection?",
-                    choices=[
-                        {"name": f"▶ Yes — Resume & download remaining ({rem} videos)", "value": "resume"},
-                        {"name": "✎ No  — Select fresh courses/chapters", "value": "fresh"},
-                    ],
-                    border=True,
-                    style=TUI_STYLE,
-                ).execute()
-
-                if choice == "resume":
+                if matched_courses:
+                    print_session_status(matched_courses, output_dir)
                     return matched_courses
 
     # Fresh selection flow
@@ -308,23 +307,6 @@ def select_workflow(all_courses: list[Course], cookies: dict, scraper, output_di
                 subject.chapters = []
                 new_saved_ch_map[subject.id] = []
                 continue
-
-            # Show numbered list for reordering
-            console.print(f"\n[bold]Download order for [{subject.name}]:[/bold]")
-            for i, ch in enumerate(selected_chs, 1):
-                console.print(f"  [dim]{i}.[/dim] {ch.name}")
-
-            raw = inquirer.text(
-                message="Enter new order (e.g. 3,1,2) or Enter to keep:",
-                style=TUI_STYLE,
-            ).execute().strip()
-
-            if raw:
-                try:
-                    indices = [int(x.strip()) - 1 for x in raw.split(",")]
-                    selected_chs = [selected_chs[i] for i in indices if 0 <= i < len(selected_chs)]
-                except (ValueError, IndexError):
-                    console.print("[yellow]Invalid order input — keeping original.[/yellow]")
 
             subject.chapters = selected_chs
             new_saved_ch_map[subject.id] = [ch.id for ch in selected_chs]
