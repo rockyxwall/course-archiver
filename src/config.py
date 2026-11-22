@@ -31,7 +31,7 @@ def load() -> Config:
     output_dir = Path(os.environ.get("OUTPUT_DIR", "./downloads"))
     concurrent_fragments = int(os.environ.get("CONCURRENT_FRAGMENTS", "10"))
     concurrent_downloads = int(os.environ.get("CONCURRENT_DOWNLOADS", "3"))
-    video_quality = int(os.environ.get("VIDEO_QUALITY", "720"))
+    video_quality = int(os.environ.get("VIDEO_QUALITY", "1080"))
 
     RUNTIME_DIR.mkdir(exist_ok=True)
     session_path = RUNTIME_DIR / "session.json"

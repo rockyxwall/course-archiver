@@ -7,13 +7,10 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.progress import (
     BarColumn,
-    DownloadColumn,
     Progress,
     SpinnerColumn,
     TaskProgressColumn,
     TextColumn,
-    TimeRemainingColumn,
-    TransferSpeedColumn,
 )
 from rich.table import Table
 from rich.tree import Tree
@@ -100,19 +97,6 @@ def _save_state(state: dict) -> None:
         pass
 
 
-def print_course_tree(courses: list[Course]) -> None:
-    tree = Tree("[bold cyan]Selected Courses[/bold cyan]")
-    for course in courses:
-        c_branch = tree.add(f"[green]{course.name}[/green]")
-        for subject in course.subjects:
-            s_branch = c_branch.add(f"[yellow]{subject.name}[/yellow]")
-            for chapter in subject.chapters:
-                ch_branch = s_branch.add(f"[blue]{chapter.name}[/blue]")
-                for video in chapter.videos:
-                    ch_branch.add(f"{video.number:02d}. {video.title}")
-    console.print(tree)
-
-
 def print_session_status(courses: list[Course], output_dir: Path) -> tuple[int, int]:
     """Prints a detailed downloader-grade status view of previous selection."""
     from src import downloader
@@ -153,7 +137,7 @@ def print_session_status(courses: list[Course], output_dir: Path) -> tuple[int, 
                             output_dir, course.name, subject.name,
                             chapter.name, video.number, video.title, f"{lbl}.pdf"
                         )
-                        if p_out.exists() or p_out.with_suffix(".url").exists():
+                        if downloader.is_downloaded(p_out):
                             v_pdfs_done += 1
 
                     total_pdfs += v_pdfs_total
@@ -273,7 +257,7 @@ def select_workflow(all_courses: list[Course], cookies: dict, scraper, output_di
         # Prompt for subject/section if course has multiple subjects (e.g. Live vs Archive)
         if len(course.subjects) > 1:
             subj_choices = [
-                {"name": s.name, "value": s, "enabled": False}
+                {"name": s.name, "value": s, "enabled": True}
                 for s in course.subjects
             ]
             selected_subjects = inquirer.checkbox(
@@ -332,6 +316,3 @@ def print_summary(total: int, completed: int, skipped: int, failed: int, output_
     table.add_row("Save Directory", f"[cyan]{output_dir}[/cyan]")
     console.print()
     console.print(Panel(table, border_style="green", expand=False))
-
-
-

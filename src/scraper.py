@@ -1,14 +1,19 @@
-"""Scraper: uses JSON API directly. No DOM scraping needed."""
-import re
-import threading
-import time
+"""Scraper: uses JSON API directly with connection pooling and token auto-refresh."""
 from dataclasses import dataclass, field
 from typing import Optional
 
 import requests as req
-from playwright.sync_api import Page
 
 API_BASE = "https://api.redwansmethod.com"
+
+_session = req.Session()
+_session.headers.update({
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    )
+})
+_active_token: Optional[str] = None
 
 
 @dataclass
@@ -49,20 +54,40 @@ class Course:
 
 
 def _api(path: str, cookies: dict, token: str = "") -> dict | list:
-    headers = {"Authorization": f"Bearer {token}"} if token else {}
-    r = req.get(f"{API_BASE}{path}", cookies=cookies, headers=headers, timeout=30)
+    global _active_token
+    auth_token = _active_token or token
+    headers = {"Authorization": f"Bearer {auth_token}"} if auth_token else {}
+    r = _session.get(f"{API_BASE}{path}", cookies=cookies, headers=headers, timeout=30)
+    if r.status_code == 401 and cookies:
+        try:
+            _, new_token = get_session_info(cookies)
+            _active_token = new_token
+            if new_token:
+                headers["Authorization"] = f"Bearer {new_token}"
+            r = _session.get(f"{API_BASE}{path}", cookies=cookies, headers=headers, timeout=30)
+        except Exception:
+            pass
     r.raise_for_status()
     return r.json()
 
 
 def get_session_info(session_cookies: dict) -> tuple[str, str]:
     """Returns (user_id, access_token)."""
-    r = req.get("https://www.redwansmethod.com/api/auth/session", cookies=session_cookies, timeout=10)
+    global _active_token
+    r = _session.get("https://www.redwansmethod.com/api/auth/session", cookies=session_cookies, timeout=10)
     r.raise_for_status()
     data = r.json()
-    if not isinstance(data, dict) or "user" not in data or not data["user"]:
+    if not isinstance(data, dict):
+        raise ValueError("Invalid or expired session: response is not a valid JSON object.")
+    user = data.get("user")
+    if not isinstance(user, dict):
         raise ValueError("Invalid or expired session: no user in session response.")
-    return data["user"]["mongoId"], data["user"]["accessToken"]
+    user_id = user.get("mongoId")
+    token = user.get("accessToken")
+    if not user_id or not token:
+        raise ValueError("Invalid or expired session: missing mongoId or accessToken.")
+    _active_token = token
+    return user_id, token
 
 
 def is_session_valid(session_cookies: dict) -> bool:
@@ -77,30 +102,34 @@ def get_all_courses(cookies: dict) -> list[Course]:
     user_id, token = get_session_info(cookies)
     data = _api(f"/courses/fetchCoursesByUser/{user_id}", cookies, token)
     items = data.get("courses", data) if isinstance(data, dict) else data
-    return [Course(id=c["_id"], name=c["courseName"]) for c in items]
+    return [Course(id=c["_id"], name=c.get("courseName") or c.get("title") or "Untitled") for c in items]
 
 
 def get_course_tree(course: Course, cookies: dict) -> None:
-    """Populate course.subjects → chapters → videos in-place."""
+    """Populate course.subjects -> chapters -> videos in-place."""
     course.subjects = []
     _, token = get_session_info(cookies)
     sdata = _api(f"/subjects/fetchAllSubjects/{course.id}", cookies, token)
     subjects_raw = sdata.get("subjects", sdata) if isinstance(sdata, dict) else sdata
     for s in subjects_raw:
-        subject = Subject(id=s["_id"], name=s["subjectName"])
+        subject = Subject(id=s["_id"], name=s.get("subjectName") or "")
         cdata = _api(f"/chapters/fetchAllChapters/{subject.id}", cookies, token)
         chapters_raw = cdata.get("chapters", cdata) if isinstance(cdata, dict) else cdata
-        for ch in sorted(chapters_raw, key=lambda x: x.get("position", 0)):
-            chapter = Chapter(id=ch["_id"], name=ch["chapterName"], position=ch.get("position", 0))
+        for ch in sorted(chapters_raw, key=lambda x: int(x.get("position") or 0)):
+            chapter = Chapter(
+                id=ch["_id"],
+                name=ch.get("chapterName") or "",
+                position=int(ch.get("position") or 0),
+            )
             vdata = _api(f"/videos/fetchAllVideos/{chapter.id}", cookies, token)
             videos_raw = vdata.get("videos", vdata) if isinstance(vdata, dict) else vdata
-            for v in sorted(videos_raw, key=lambda x: x.get("videoNumber", 0)):
+            for v in sorted(videos_raw, key=lambda x: int(x.get("videoNumber") or 0)):
                 chapter.videos.append(Video(
                     id=v["_id"],
-                    title=v.get("videoTitle", ""),
-                    number=v.get("videoNumber", 0),
-                    video_type=v.get("videoType", "bunny").lower(),
-                    bunny_id=v.get("bunnyVideoId", ""),
+                    title=v.get("videoTitle") or "",
+                    number=int(v.get("videoNumber") or 0),
+                    video_type=(v.get("videoType") or "bunny").lower(),
+                    bunny_id=v.get("bunnyVideoId") or "",
                     watch_url=f"https://www.redwansmethod.com/watch/{v['_id']}",
                     youtube_url=v.get("videoYoutubeURL") or None,
                     lecture_sheet_url=v.get("videoLectureSheetURL") or None,
@@ -113,7 +142,7 @@ def get_course_tree(course: Course, cookies: dict) -> None:
 
 
 def resolve_stream(video: Video, cookies: dict, token: str) -> tuple[Optional[str], str]:
-    """Resolve stream URL in ~50ms using existing _api without launching browser."""
+    """Resolve stream URL in ~50ms using JSON API without launching browser."""
     # 1. Direct YouTube video
     if video.video_type == "youtube" and video.youtube_url:
         return video.youtube_url, "https://www.youtube.com/"
@@ -124,8 +153,18 @@ def resolve_stream(video: Video, cookies: dict, token: str) -> tuple[Optional[st
             data = _api(f"/videos/signed-playback/{video.id}", cookies, token)
             cdn_url = data.get("url") if isinstance(data, dict) else None
             if cdn_url:
-                # Fast HEAD check (3s timeout) to verify file exists on CDN (rejects 404s)
-                if req.head(cdn_url, headers={"Referer": "https://www.redwansmethod.com/"}, timeout=3).ok:
+                try:
+                    head_resp = _session.head(
+                        cdn_url,
+                        headers={"Referer": "https://www.redwansmethod.com/"},
+                        timeout=5,
+                    )
+                    # Only reject if CDN explicitly confirms the stream does not exist
+                    if head_resp.status_code in (404, 410):
+                        cdn_url = None
+                except Exception:
+                    pass
+                if cdn_url:
                     return cdn_url, "https://www.redwansmethod.com/"
         except Exception:
             pass
@@ -135,131 +174,3 @@ def resolve_stream(video: Video, cookies: dict, token: str) -> tuple[Optional[st
         return video.youtube_url, "https://www.youtube.com/"
 
     return None, ""
-
-
-def intercept_video_url(page: Page, video: Video, timeout_ms: int = 12_000) -> Optional[dict]:
-    """
-    Navigate to watch page and capture the video URL and Referer header.
-    Handles:
-    - Direct YouTube videos (skips Playwright if youtube_url known)
-    - Bunny CDN: playlist.m3u8 (validating response.ok, rejecting 404)
-    - Automatic fallback to YouTube if Bunny returns 404 or fails
-    """
-    if video.video_type == "youtube" and video.youtube_url:
-        return {"url": video.youtube_url, "referer": "https://www.youtube.com/"}
-
-    captured: Optional[dict] = None
-    lock = threading.Lock()
-
-    def handle_response(response):
-        nonlocal captured
-        url = response.url
-        if captured is not None:
-            return
-
-        # 1. Bunny CDN m3u8 - only accept successful response
-        if "playlist.m3u8" in url:
-            if response.ok:
-                with lock:
-                    referer = (
-                        response.request.headers.get("referer")
-                        or response.request.headers.get("Referer")
-                        or "https://www.redwansmethod.com/"
-                    )
-                    captured = {"url": url, "referer": referer}
-                return
-            elif response.status == 404 and video.youtube_url:
-                with lock:
-                    captured = {
-                        "url": video.youtube_url,
-                        "referer": "https://www.youtube.com/",
-                    }
-                return
-
-        # 2. YouTube network request
-        m = re.search(r"(?:youtu\.be/|youtube(?:-nocookie)?\.com/(?:embed/|watch\?v=))([A-Za-z0-9_-]{11})", url)
-        if m:
-            with lock:
-                captured = {
-                    "url": f"https://www.youtube.com/watch?v={m.group(1)}",
-                    "referer": "https://www.youtube.com/",
-                }
-
-    page.on("response", handle_response)
-    try:
-        page.goto(video.watch_url)
-        page.wait_for_load_state("domcontentloaded", timeout=10_000)
-    except Exception:
-        pass
-
-    # Poll up to timeout_ms: check network response OR DOM iframe/metadata
-    start = time.time()
-    while captured is None and (time.time() - start) * 1000 < timeout_ms:
-        try:
-            yt_id = page.evaluate(r"""() => {
-                // 1. Scan iframes
-                for (const iframe of document.querySelectorAll('iframe')) {
-                    const src = iframe.src || iframe.getAttribute('src') || '';
-                    const m = src.match(/(?:embed\/|v=|youtu\.be\/)([A-Za-z0-9_-]{11})/);
-                    if (m) return m[1];
-                    for (const attr of ['data-video-id', 'data-videoid', 'data-youtube-id', 'data-yt-id']) {
-                        const val = iframe.getAttribute(attr);
-                        if (val && /^[A-Za-z0-9_-]{11}$/.test(val)) return val;
-                    }
-                }
-
-                // 2. Scan video elements & parents
-                for (const video of document.querySelectorAll('video')) {
-                    let el = video;
-                    let depth = 0;
-                    while (el && depth < 6) {
-                        for (const attr of ['data-video-id', 'data-videoid', 'data-youtube-id', 'data-yt-id']) {
-                            const val = el.getAttribute && el.getAttribute(attr);
-                            if (val && /^[A-Za-z0-9_-]{11}$/.test(val)) return val;
-                        }
-                        el = el.parentElement;
-                        depth++;
-                    }
-                }
-
-                // 3. Scan meta tags
-                for (const sel of ['meta[property="og:video"]', 'meta[property="og:video:url"]', 'meta[name="twitter:player"]']) {
-                    const meta = document.querySelector(sel);
-                    if (meta) {
-                        const content = meta.getAttribute('content') || '';
-                        const m = content.match(/(?:embed\/|v=)([A-Za-z0-9_-]{11})/);
-                        if (m) return m[1];
-                    }
-                }
-
-                // 4. Scan script tags
-                for (const script of document.querySelectorAll('script')) {
-                    const text = script.textContent || '';
-                    const m = text.match(/["']([A-Za-z0-9_-]{11})["'].*youtube/i) || text.match(/youtube.*["']([A-Za-z0-9_-]{11})["']/i);
-                    if (m) return m[1];
-                }
-
-                return null;
-            }""")
-
-            if yt_id:
-                captured = {
-                    "url": f"https://www.youtube.com/watch?v={yt_id}",
-                    "referer": "https://www.youtube.com/",
-                }
-                break
-        except Exception:
-            pass
-
-        if captured:
-            break
-        page.wait_for_timeout(100)
-
-    page.remove_listener("response", handle_response)
-    if captured is None and video.youtube_url:
-        captured = {
-            "url": video.youtube_url,
-            "referer": "https://www.youtube.com/",
-        }
-    return captured
-

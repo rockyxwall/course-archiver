@@ -11,18 +11,5 @@
     "email_input": "input[type='email']",
     "password_input": "input[type='password']",
     "submit_button": "button[type='submit']"
-  },
-  "courses_list": {
-    "url": "https://redwansmethod.com/courses",
-    "course_link": "a[href*='/course/']"
-  },
-  "course_page": {
-    "module_container": ".module",
-    "module_title": ".module-title",
-    "lesson_link": "a[href*='/lesson/']"
-  },
-  "lesson_page": {
-    "pdf_link": "a[href$='.pdf']",
-    "title": "h1"
   }
 }

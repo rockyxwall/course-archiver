@@ -24,6 +24,7 @@ def login(page: Page, sel: dict, email: str, password: str) -> None:
 
 
 def save_session(context: BrowserContext, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     state = context.storage_state()
     path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -40,7 +41,3 @@ def load_session_cookies(path: Path) -> dict[str, str]:
 
 def get_requests_cookies(context: BrowserContext) -> dict[str, str]:
     return {c["name"]: c["value"] for c in context.cookies()}
-
-
-def build_cookie_str(context: BrowserContext) -> str:
-    return "; ".join(f"{c['name']}={c['value']}" for c in context.cookies())
